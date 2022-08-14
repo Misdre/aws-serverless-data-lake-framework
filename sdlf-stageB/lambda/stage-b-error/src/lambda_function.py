@@ -12,7 +12,7 @@ def lambda_handler(event, context):
         if isinstance(event, str):
             event = json.loads(event)
         sqs_config = SQSConfiguration(
-            event['body']['team'], event['body']['dataset'], event['body']['pipeline_stage'])
+            event['body']['team'], event['body']['pipeline'], event['body']['pipeline_stage'])
         sqs_interface = SQSInterface(sqs_config.get_stage_dlq_name)
 
         logger.info('Execution Failed. Sending original payload to DLQ')

@@ -16,7 +16,7 @@ def lambda_handler(event, context):
         dataset = event['dataset']
         stage = os.environ['STAGE']
         state_config = StateMachineConfiguration(team, pipeline, stage)
-        sqs_config = SQSConfiguration(team, dataset, stage)
+        sqs_config = SQSConfiguration(team, pipeline, stage)
         dlq_interface = SQSInterface(sqs_config.get_stage_dlq_name)
 
         messages = dlq_interface.receive_messages(1)

@@ -1,22 +1,23 @@
-import os
 import json
-from datetime import datetime
 import logging
+import os
 import uuid
+from datetime import datetime
 from urllib.parse import unquote_plus
 
 import boto3
-from boto3.dynamodb.conditions import Key, Attr
-from botocore.exceptions import ClientError
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 session_config = Config(user_agent_extra="awssdlf/1.0.0")
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-sqs = boto3.resource('sqs', config=session_config)
+events = boto3.client('events', config=session_config)
 dynamodb = boto3.resource("dynamodb", config=session_config)
 dataset_table = dynamodb.Table('octagon-Datasets-{}'.format(os.environ['ENV']))
+pipeline_table = dynamodb.Table('octagon-Pipelines-{}'.format(os.environ['ENV']))
 
 
 def parse_s3_event(s3_event):
@@ -28,6 +29,25 @@ def parse_s3_event(s3_event):
         'timestamp': int(round(datetime.utcnow().timestamp()*1000, 0)),
         'stage': 'raw'
     }
+
+
+def paginate_dynamodb_response(dynamodb_action, **kwargs):
+    keywords = kwargs
+
+    done = False
+    start_key = None
+
+    while not done:
+        if start_key:
+            keywords['ExclusiveStartKey'] = start_key
+
+        response = dynamodb_action(**keywords)
+
+        start_key = response.get('LastEvaluatedKey', None)
+        done = start_key is None
+
+        for item in response.get("Items", []):
+            yield item
 
 
 def get_item(table, team, dataset):
@@ -42,6 +62,19 @@ def get_item(table, team, dataset):
     else:
         item = response['Item']
         return item['pipeline']
+
+
+def get_pipeline_entrypoint(table, team, pipeline):
+    query = paginate_dynamodb_response(
+        table.query,
+        IndexName='entrypoint-name-index',
+        KeyConditionExpression=Key('entrypoint').eq('true') & Key('name').begins_with('{}-{}-'.format(team, pipeline))
+    )
+
+    for row in query:
+        return row['name'].removeprefix('{}-{}-'.format(team, pipeline))
+    else:
+        raise Exception('The selected pipeline does not have an entry point.')
 
 
 def lambda_handler(event, context):
@@ -64,17 +97,24 @@ def lambda_handler(event, context):
             message['org'] = os.environ['ORG']
             message['app'] = os.environ['APP']
             message['env'] = os.environ['ENV']
-            message['pipeline_stage'] = 'StageA'
+            pipeline_stage = get_pipeline_entrypoint(pipeline_table, team, pipeline)
+            logger.info('Pipeline entrypoint: {}'.format(pipeline_stage))
+            message['pipeline_stage'] = pipeline_stage
 
             logger.info(
-                'Sending event to {}-{} pipeline queue for processing'.format(team, pipeline))
-            queue = sqs.get_queue_by_name(QueueName='sdlf-{}-{}-queue-a.fifo'.format(
-                team,
-                pipeline
-            ))
-            queue.send_message(MessageBody=json.dumps(
-                message), MessageGroupId='{}-{}'.format(team, dataset),
-                MessageDeduplicationId=str(uuid.uuid1()))
+                'Sending events to default event bus for processing')
+            entries = events.put_events(
+                Entries=[
+                    {
+                        'Source': 'sdlf.s3',
+                        'DetailType': 'SdlfObjectInS3',
+                        'Detail': json.dumps(message)
+                    },
+                ]
+            )
+
+            if entries['FailedEntryCount'] > 0:
+                raise Exception('Some entries could not be sent to EventBridge: {}'.format(entries))
     except Exception as e:
         logger.error("Fatal error", exc_info=True)
         raise e
