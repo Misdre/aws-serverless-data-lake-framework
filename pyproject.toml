@@ -1,0 +1,31 @@
+[tool.isort]
+py_version = 39
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+line_length = 120
+skip_gitignore = true
+extend_skip_glob = ["sdlf-foundations/scripts/deequ/*"]
+
+[tool.black]
+target-version = ["py39", "py310"]
+line-length = 120
+extend-exclude = '''
+(
+  ^/sdlf-foundations/scripts/deequ/
+)
+'''
+
+[tool.pylint.main]
+py-version = "3.9"
+ignore-paths = "^/sdlf-foundations/scripts/deequ/"
+jobs = 0
+
+[tool.pylint.format]
+max-line-length = 120
+max-module-lines = 1500
+
+
+# see also flake8 settings in .flake8

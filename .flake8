@@ -1,0 +1,4 @@
+[flake8]
+max-line-length = 120
+extend_exclude = sdlf-foundations/scripts/deequ/
+# pyproject.toml cannot be used for flake8: https://github.com/PyCQA/flake8/issues/234#issuecomment-812800722
