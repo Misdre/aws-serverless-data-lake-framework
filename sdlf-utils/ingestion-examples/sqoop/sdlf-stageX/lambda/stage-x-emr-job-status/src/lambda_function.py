@@ -1,9 +1,10 @@
-import os
 import json
-import boto3
 import logging
+import os
 import random
 from time import sleep
+
+import boto3
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)

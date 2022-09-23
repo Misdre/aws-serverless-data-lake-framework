@@ -1,10 +1,10 @@
-import boto3
 import json
 import os
 import sys
 import traceback
+from typing import Any, List
 
-from typing import List, Any
+import boto3
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from botocore.exceptions import ClientError
 

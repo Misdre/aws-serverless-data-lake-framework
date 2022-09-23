@@ -1,6 +1,7 @@
-import json
-import boto3
 import datetime
+import json
+
+import boto3
 
 ### Step in the testing framework's step function to update end timestamp and
 ### move the testing to the next test.

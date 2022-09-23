@@ -1,12 +1,13 @@
-import sys
-import json
-from urllib.parse import urlparse
-import urllib
 import datetime
-import boto3
-import time
-from awsglue.utils import getResolvedOptions
+import json
 import logging
+import sys
+import time
+import urllib
+from urllib.parse import urlparse
+
+import boto3
+from awsglue.utils import getResolvedOptions
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)

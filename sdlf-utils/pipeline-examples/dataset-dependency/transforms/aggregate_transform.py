@@ -1,8 +1,7 @@
-import json
 import datetime as dt
+import json
 
 import boto3
-
 from datalake_library.commons import init_logger
 
 logger = init_logger(__name__)

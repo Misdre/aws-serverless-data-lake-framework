@@ -1,16 +1,15 @@
-import boto3
 import io
-from io import StringIO
-import pandas as pd
-from datetime import datetime
 import json
+from datetime import datetime
+from io import StringIO
 
+import boto3
+import pandas as pd
 from datalake_library import octagon
-from datalake_library.octagon import Artifact, EventReasonEnum, peh
 from datalake_library.commons import init_logger
-from datalake_library.configuration.resource_configs import S3Configuration, KMSConfiguration
+from datalake_library.configuration.resource_configs import KMSConfiguration, S3Configuration
 from datalake_library.interfaces.s3_interface import S3Interface
-
+from datalake_library.octagon import Artifact, EventReasonEnum, peh
 
 logger = init_logger(__name__)
 s3_interface = S3Interface()

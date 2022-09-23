@@ -8,26 +8,29 @@
 # Author: noahpaig
 #######################################################
 
+import csv
+import io
+import os
+import shutil
+from datetime import datetime
+
+import boto3
+
 #######################################################
 # Import section
 # sdlf-pipLibrary repository can be leveraged
 # to add external libraries as a layer if need be
 #######################################################
 import pandas as pd
-import csv
-from datetime import datetime
-import os
-import shutil
-import boto3
-import io
-from langdetect import detect
+
 #######################################################
 # Use S3 Interface to interact with S3 objects
 # For example to download/upload them
 #######################################################
 from datalake_library.commons import init_logger
-from datalake_library.configuration.resource_configs import S3Configuration, KMSConfiguration
+from datalake_library.configuration.resource_configs import KMSConfiguration, S3Configuration
 from datalake_library.interfaces.s3_interface import S3Interface
+from langdetect import detect
 
 s3_interface = S3Interface()
 # IMPORTANT: Stage bucket where transformed data must be uploaded

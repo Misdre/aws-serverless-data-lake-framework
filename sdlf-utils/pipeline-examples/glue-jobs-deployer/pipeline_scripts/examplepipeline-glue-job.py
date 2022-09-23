@@ -1,17 +1,18 @@
-import sys
 import json
-import boto3
+import sys
 import time
-import pyspark.sql.functions as F
-from datetime import datetime, timedelta
 from collections import OrderedDict
+from datetime import datetime, timedelta
+
+import boto3
+import pyspark.sql.functions as F
+from awsglue.context import GlueContext
+from awsglue.dynamicframe import DynamicFrame
+from awsglue.job import Job
 from awsglue.transforms import *
-from pyspark.sql.window import Window
 from awsglue.utils import getResolvedOptions
 from pyspark.context import SparkContext
-from awsglue.context import GlueContext
-from awsglue.job import Job
-from awsglue.dynamicframe import DynamicFrame
+from pyspark.sql.window import Window
 
 # context initiation
 glueContext = GlueContext(SparkContext.getOrCreate())

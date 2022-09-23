@@ -1,8 +1,11 @@
-import json, boto3, datetime
-import math
+import datetime
+import json
 import logging
+import math
 import os
 import urllib.parse
+
+import boto3
 from botocore.exceptions import ClientError
 
 logger = logging.getLogger()

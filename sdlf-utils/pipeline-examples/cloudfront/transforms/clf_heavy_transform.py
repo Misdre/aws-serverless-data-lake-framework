@@ -8,16 +8,16 @@
 # Author: jaidi
 #######################################################
 
+import datetime as dt
+
 #######################################################
 # Import section
 # sdlf-pipLibrary repository can be leveraged
 # to add external libraries as a layer
 #######################################################
 import json
-import datetime as dt
 
 import boto3
-
 from datalake_library.commons import init_logger
 from datalake_library.configuration.resource_configs import S3Configuration
 

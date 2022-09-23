@@ -1,16 +1,15 @@
 import sys
+from urllib.parse import unquote, urlparse
 
-from awsglue.job import Job
-from pyspark.context import SparkContext
+import boto3
 from awsglue.context import GlueContext
-from pyspark.sql import SQLContext
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
-from pyspark.sql.window import Window
+from awsglue.job import Job
 from awsglue.utils import getResolvedOptions
 from botocore.exceptions import ClientError
-import boto3
-from urllib.parse import urlparse, unquote
+from pyspark.context import SparkContext
+from pyspark.sql import SparkSession, SQLContext
+from pyspark.sql.functions import *
+from pyspark.sql.window import Window
 
 ddbconn = boto3.client('dynamodb', region_name=getResolvedOptions(
     sys.argv, ['aws_region'])['aws_region'])

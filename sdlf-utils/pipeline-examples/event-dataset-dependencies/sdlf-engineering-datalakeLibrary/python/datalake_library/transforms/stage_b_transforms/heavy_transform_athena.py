@@ -15,21 +15,22 @@
 # to add external libraries as a layer if need be
 #######################################################
 import json
-import boto3
-import time
-import sys
 import logging
+import sys
+import time
 import traceback
-from datetime import date, datetime
-from dateutil.relativedelta import relativedelta
-from datetime import timedelta
+from datetime import date, datetime, timedelta
+
+import boto3
+
 #######################################################
 # Use S3 Interface to interact with S3 objects
 # For example to download/upload them
 #######################################################
 from datalake_library.commons import init_logger
-from datalake_library.configuration.resource_configs import S3Configuration, KMSConfiguration
+from datalake_library.configuration.resource_configs import KMSConfiguration, S3Configuration
 from datalake_library.interfaces.s3_interface import S3Interface
+from dateutil.relativedelta import relativedelta
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)

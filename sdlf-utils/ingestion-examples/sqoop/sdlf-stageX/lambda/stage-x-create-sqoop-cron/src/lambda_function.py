@@ -15,15 +15,16 @@
 # Scheduled job to invoke EMR cluster with sqoop to import data
 # Lambda Function for Data Lake Import
 # Author: Emmanuel Arenas Garcia (emmgrci@amazon.com) 2020-09-15
-from botocore.vendored import requests
-from botocore.exceptions import ClientError
 import json
-import os
 import logging
-import traceback
+import os
 import sys
+import traceback
+
 import boto3
 from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
+from botocore.exceptions import ClientError
+from botocore.vendored import requests
 
 DYNAMO_SCHEDULE_TABLE = os.getenv('DYNAMO_SCHEDULE_TABLE')
 CLOUDWATCH_TARGET = os.getenv('CLOUDWATCH_TARGET')

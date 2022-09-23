@@ -1,10 +1,10 @@
-from datalake_library.commons import init_logger
-from datalake_library.transforms.transform_handler import TransformHandler
 from datalake_library import octagon
-from datalake_library.octagon import Artifact, EventReasonEnum, peh
+from datalake_library.commons import init_logger
 from datalake_library.configuration.resource_configs import DynamoConfiguration, S3Configuration
 from datalake_library.interfaces.dynamo_interface import DynamoInterface
 from datalake_library.interfaces.s3_interface import S3Interface
+from datalake_library.octagon import Artifact, EventReasonEnum, peh
+from datalake_library.transforms.transform_handler import TransformHandler
 
 logger = init_logger(__name__)
 

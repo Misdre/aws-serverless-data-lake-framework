@@ -1,6 +1,7 @@
-import json
-import boto3
 import datetime
+import json
+
+import boto3
 
 ### Test picker to pick an active test, identify the ARN/test params and hand
 ### it to step function for execution.

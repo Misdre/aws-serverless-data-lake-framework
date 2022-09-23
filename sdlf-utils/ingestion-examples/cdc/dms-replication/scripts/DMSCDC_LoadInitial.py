@@ -1,12 +1,11 @@
 import sys
 
-from awsglue.job import Job
-from pyspark.context import SparkContext
-from pyspark.sql import SQLContext
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
-from awsglue.utils import getResolvedOptions
 from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from pyspark.sql import SparkSession, SQLContext
+from pyspark.sql.functions import *
 
 args = getResolvedOptions(sys.argv, [
     'JOB_NAME',

@@ -1,9 +1,12 @@
-import json, boto3, datetime
+import datetime
+import json
 import logging
 import os
 import urllib.parse
-from botocore.exceptions import ClientError
 import uuid
+
+import boto3
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)

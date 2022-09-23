@@ -15,11 +15,12 @@
 # Scheduled job to invoke EMR cluster with sqoop to import data
 # Lambda Function for Data Lake Import
 # Author: Emmanuel Arenas Garcia (emmgrci@amazon.com) 2020-09-15
-import os
 import json
 import logging
-import boto3
+import os
 import time
+
+import boto3
 from datalake_library.commons import init_logger
 from datalake_library.configuration.resource_configs import StateMachineConfiguration
 from datalake_library.interfaces.states_interface import StatesInterface

@@ -1,5 +1,7 @@
-import json, boto3, sys
+import json
+import sys
 
+import boto3
 
 profile = sys.argv[1]
 region = sys.argv[2]

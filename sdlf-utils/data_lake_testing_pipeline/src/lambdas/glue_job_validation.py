@@ -1,5 +1,6 @@
 import json
 
+
 def validate_job(event, context):
     # TODO implement
     response = {}

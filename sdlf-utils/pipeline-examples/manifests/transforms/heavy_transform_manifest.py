@@ -8,18 +8,18 @@
 # Author: moumnajhi
 #######################################################
 
+import datetime as dt
+
 #######################################################
 # Import section
 # common-pipLibrary repository can be leveraged
 # to add external libraries as a layer
 #######################################################
 import json
-import datetime as dt
 
 import boto3
-
 from datalake_library.commons import init_logger
-from datalake_library.configuration.resource_configs import DynamoConfiguration, S3Configuration, KMSConfiguration
+from datalake_library.configuration.resource_configs import DynamoConfiguration, KMSConfiguration, S3Configuration
 from datalake_library.interfaces.dynamo_interface import DynamoInterface
 from datalake_library.interfaces.s3_interface import S3Interface
 

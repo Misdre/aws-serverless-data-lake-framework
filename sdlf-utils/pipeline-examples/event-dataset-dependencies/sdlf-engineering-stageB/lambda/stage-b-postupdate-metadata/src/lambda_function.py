@@ -1,15 +1,16 @@
-import boto3
-import json
 import decimal
+import json
 from datetime import datetime
-from dateutil.relativedelta import relativedelta
+
+import boto3
+from datalake_library import octagon
 from datalake_library.commons import init_logger
 from datalake_library.configuration.resource_configs import DynamoConfiguration, SQSConfiguration
 from datalake_library.interfaces.dynamo_interface import DynamoInterface
 from datalake_library.interfaces.s3_interface import S3Interface
 from datalake_library.interfaces.sqs_interface import SQSInterface
-from datalake_library import octagon
 from datalake_library.octagon import Artifact, EventReasonEnum, peh
+from dateutil.relativedelta import relativedelta
 
 logger = init_logger(__name__)
 dynamodb = boto3.resource('dynamodb')
