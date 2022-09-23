@@ -25,36 +25,32 @@ stage_bucket = S3Configuration().stage_bucket
 logger = init_logger(__name__)
 
 
-class CustomTransform():
+class CustomTransform:
     def __init__(self):
         logger.info("S3 CloudFront Transform initiated")
 
     def transform_object(self, bucket, key, team, dataset):
-
         def http_outcome(status_code):
-            if status_code == '200':
-                return 'success'
+            if status_code == "200":
+                return "success"
             else:
-                return 'error'
+                return "error"
 
         local_path = s3_interface.download_object(bucket, key)
-        output_path = "{}_transformed.csv".format(local_path.split('.')[0])
+        output_path = "{}_transformed.csv".format(local_path.split(".")[0])
         fh = open(output_path, "w")
         with open(local_path) as fd:
             rd = csv.reader(fd, delimiter="\t", quotechar='"')
             for row in rd:
-                fh.write('{}\t{}\n'.format(
-                    '\t'.join(row), http_outcome(row[8])))
+                fh.write("{}\t{}\n".format("\t".join(row), http_outcome(row[8])))
         fh.close()
 
         # Uploading file to Stage bucket at appropriate path
         # IMPORTANT: Build the output s3_path without the s3://stage-bucket/
-        s3_path = 'pre-stage/{}/{}/{}'.format(team,
-                                              dataset, output_path.split('/')[2])
+        s3_path = "pre-stage/{}/{}/{}".format(team, dataset, output_path.split("/")[2])
         # IMPORTANT: Notice "stage_bucket" not "bucket"
         kms_key = KMSConfiguration(team).get_kms_arn
-        s3_interface.upload_object(
-            output_path, stage_bucket, s3_path, kms_key=kms_key)
+        s3_interface.upload_object(output_path, stage_bucket, s3_path, kms_key=kms_key)
         # IMPORTANT S3 path(s) must be stored in a list
         processed_keys = [s3_path]
 

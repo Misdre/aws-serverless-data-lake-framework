@@ -26,32 +26,28 @@ def lambda_handler(event, context):
 
     # TODO Implement Redrive Logic (through message_group_id)
     try:
-        logger.info('Received recent messages: {} '.format(event))
-        for record in event['Records']:
-            record_body = json.loads(record['body'])
-            team = record_body['team']
-            pipeline = record_body['pipeline']
-            stage = record_body['pipeline_stage']
-            dataset = record_body['dataset']
-            org = record_body['org']
-            app = record_body['app']
-            env = record_body['env']
-            dest_table = record_body['dest_table']['name']
+        logger.info("Received recent messages: {} ".format(event))
+        for record in event["Records"]:
+            record_body = json.loads(record["body"])
+            team = record_body["team"]
+            pipeline = record_body["pipeline"]
+            stage = record_body["pipeline_stage"]
+            dataset = record_body["dataset"]
+            org = record_body["org"]
+            app = record_body["app"]
+            env = record_body["env"]
+            dest_table = record_body["dest_table"]["name"]
             stage_bucket = S3Configuration().stage_bucket
-            record_body['bucket'] = stage_bucket
-            record_body['keysToProcess'] = record_body['prev_stage_processed_keys']
+            record_body["bucket"] = stage_bucket
+            record_body["keysToProcess"] = record_body["prev_stage_processed_keys"]
 
-            response = {
-                'statusCode': 200,
-                'body': record_body
-                }
+            response = {"statusCode": 200, "body": record_body}
             precision = 3
-            seconds = f'{time.time():.{precision}f}'
-            state_machine_name = f'{dataset}-{dest_table}-{seconds}'
-            logger.info('Starting State Machine Execution')
+            seconds = f"{time.time():.{precision}f}"
+            state_machine_name = f"{dataset}-{dest_table}-{seconds}"
+            logger.info("Starting State Machine Execution")
             state_config = StateMachineConfiguration(team, pipeline, stage)
-            StatesInterface().run_state_machine(
-                state_config.get_stage_state_machine_arn, response, state_machine_name)
+            StatesInterface().run_state_machine(state_config.get_stage_state_machine_arn, response, state_machine_name)
     except Exception as e:
         # # If failure send to DLQ
         # if keys_to_process:

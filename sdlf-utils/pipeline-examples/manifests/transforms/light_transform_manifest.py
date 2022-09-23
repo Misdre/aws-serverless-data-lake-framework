@@ -30,19 +30,16 @@ stage_bucket = S3Configuration().stage_bucket
 logger = init_logger(__name__)
 
 
-class CustomTransform():
+class CustomTransform:
     def __init__(self):
         logger.info("S3 Blueprint Light Transform initiated")
 
     def transform_object(self, bucket, key, team, dataset):
         # Copy the s3 object from raw to stage
-        s3_path = 'pre-stage/{}/{}/{}'.format(team,
-                                              dataset, key.split('/')[-1])        
-        
+        s3_path = "pre-stage/{}/{}/{}".format(team, dataset, key.split("/")[-1])
 
         kms_key = KMSConfiguration(team).get_kms_arn
-        s3_interface.copy_object(
-            bucket, key,stage_bucket ,s3_path, kms_key=kms_key)
+        s3_interface.copy_object(bucket, key, stage_bucket, s3_path, kms_key=kms_key)
         # IMPORTANT S3 path(s) must be stored in a list
         processed_keys = [s3_path]
 

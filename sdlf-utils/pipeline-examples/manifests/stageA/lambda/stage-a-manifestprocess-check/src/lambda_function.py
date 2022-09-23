@@ -11,8 +11,8 @@ import json
 
 
 def lambda_handler(event, context):
-    """ Checks if a dataset is driven by manifest file
-    
+    """Checks if a dataset is driven by manifest file
+
     Arguments:
         event {dict} -- Dictionary with details on previous processing step
         context {dict} -- Dictionary with details on Lambda context
@@ -23,26 +23,22 @@ def lambda_handler(event, context):
 
     try:
         logger.info("Fetching event data from previous step")
-        team = event['body']['team']
-        pipeline = event['body']['pipeline']
-        stage = event['body']['pipeline_stage']
-        dataset = event['body']['dataset']
-        peh_id = event['body']['peh_id']
-        env = event['body']['env']
-        ddb_key = team+"-"+dataset
+        team = event["body"]["team"]
+        pipeline = event["body"]["pipeline"]
+        stage = event["body"]["pipeline_stage"]
+        dataset = event["body"]["dataset"]
+        peh_id = event["body"]["peh_id"]
+        env = event["body"]["env"]
+        ddb_key = team + "-" + dataset
 
-        logger.info('Initializing Octagon client')
-        component = context.function_name.split('-')[-2].title()
+        logger.info("Initializing Octagon client")
+        component = context.function_name.split("-")[-2].title()
         octagon_client = (
-            octagon.OctagonClient()
-            .with_run_lambda(True)
-            .with_configuration_instance(event['body']['env'])
-            .build()
+            octagon.OctagonClient().with_run_lambda(True).with_configuration_instance(event["body"]["env"]).build()
         )
-        peh.PipelineExecutionHistoryAPI(
-            octagon_client).retrieve_pipeline_execution(peh_id)
-        
-        logger.info('Initializing DynamoDB config and Interface')
+        peh.PipelineExecutionHistoryAPI(octagon_client).retrieve_pipeline_execution(peh_id)
+
+        logger.info("Initializing DynamoDB config and Interface")
         dynamo_config = DynamoConfiguration()
         dynamo_interface = DynamoInterface(dynamo_config)
 
@@ -51,15 +47,15 @@ def lambda_handler(event, context):
         event["body"]["manifest_enabled"] = response["manifest_enabled"]
         event["body"]["manifest_details"] = response["manifest_details"]
 
-        octagon_client.update_pipeline_execution(status="{} {} Processing".format(stage, component),
-                                                 component=component)
+        octagon_client.update_pipeline_execution(
+            status="{} {} Processing".format(stage, component), component=component
+        )
 
     except Exception as e:
         logger.error("Fatal error", exc_info=True)
-        octagon_client.end_pipeline_execution_failed(component=component,
-                                                     issue_comment="{} {} Error: {}".format(stage, component, repr(e)))
+        octagon_client.end_pipeline_execution_failed(
+            component=component, issue_comment="{} {} Error: {}".format(stage, component, repr(e))
+        )
         raise e
 
     return event
-
-

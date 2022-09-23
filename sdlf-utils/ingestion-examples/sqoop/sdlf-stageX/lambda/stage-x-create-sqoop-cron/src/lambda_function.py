@@ -26,118 +26,117 @@ from boto3.dynamodb.types import TypeDeserializer, TypeSerializer
 from botocore.exceptions import ClientError
 from botocore.vendored import requests
 
-DYNAMO_SCHEDULE_TABLE = os.getenv('DYNAMO_SCHEDULE_TABLE')
-CLOUDWATCH_TARGET = os.getenv('CLOUDWATCH_TARGET')
+DYNAMO_SCHEDULE_TABLE = os.getenv("DYNAMO_SCHEDULE_TABLE")
+CLOUDWATCH_TARGET = os.getenv("CLOUDWATCH_TARGET")
 
 
 logging.basicConfig()
 logger = logging.getLogger(__name__)
-logger.setLevel(getattr(logging, os.getenv('LOG_LEVEL', 'INFO')))
-logger.info('Loading Lambda Function {}'.format(__name__))
+logger.setLevel(getattr(logging, os.getenv("LOG_LEVEL", "INFO")))
+logger.info("Loading Lambda Function {}".format(__name__))
 
-dynamoClient = boto3.resource('dynamodb', region_name='us-east-1')
-cloudWatchClient = boto3.client('events')
-lambdaClient = boto3.client('lambda')
+dynamoClient = boto3.resource("dynamodb", region_name="us-east-1")
+cloudWatchClient = boto3.client("events")
+lambdaClient = boto3.client("lambda")
+
 
 def from_dynamodb_to_json(item):
     d = TypeDeserializer()
     return {k: d.deserialize(value=v) for k, v in item.items()}
 
+
 def remove_cloudwatch_rule(job_name):
     try:
-        target_name = job_name + '_Target'
+        target_name = job_name + "_Target"
         rule_response = cloudWatchClient.remove_targets(
             Rule=job_name,
             Ids=[
                 target_name,
-            ])
+            ],
+        )
         logger.debug(rule_response)
-        rule_response = cloudWatchClient.delete_rule(
-            Name=job_name)
+        rule_response = cloudWatchClient.delete_rule(Name=job_name)
         logger.debug(rule_response)
     except Exception as e:
         exception_type, exception_value, exception_traceback = sys.exc_info()
         traceback_string = traceback.format_exception(exception_type, exception_value, exception_traceback)
-        err_msg = json.dumps({
-            "errorType": exception_type.__name__,
-            "errorMessage": str(exception_value),
-            "stackTrace": traceback_string,
-            "msg_exception": "Cloudwatch Event Exception: " + str(e)
-        })
+        err_msg = json.dumps(
+            {
+                "errorType": exception_type.__name__,
+                "errorMessage": str(exception_value),
+                "stackTrace": traceback_string,
+                "msg_exception": "Cloudwatch Event Exception: " + str(e),
+            }
+        )
         logger.error(err_msg)
         return
 
 
 def put_cloudwatch_rule(job_name, crond_expression, workflow_status, lambda_params):
-    target_name = job_name + '_Target'
+    target_name = job_name + "_Target"
     try:
-        periodicity = lambda_params.get('periodicity','DAILY')
+        periodicity = lambda_params.get("periodicity", "DAILY")
         if periodicity == "ONCE":
-            response = lambdaClient.invoke(FunctionName=CLOUDWATCH_TARGET,
-                                           InvocationType='RequestResponse',
-                                           Payload=json.dumps(lambda_params))
-            result = json.loads(response.get('Payload').read())
+            response = lambdaClient.invoke(
+                FunctionName=CLOUDWATCH_TARGET, InvocationType="RequestResponse", Payload=json.dumps(lambda_params)
+            )
+            result = json.loads(response.get("Payload").read())
             return "Step Functions fired with response message " + str(result)
         else:
             rule_response = cloudWatchClient.put_rule(
-                Name=job_name,
-                ScheduleExpression=crond_expression,
-                State=workflow_status
+                Name=job_name, ScheduleExpression=crond_expression, State=workflow_status
             )
             logger.debug(rule_response)
             try:
                 lambdaClient.add_permission(
-                        FunctionName=CLOUDWATCH_TARGET,
-                        StatementId='allow_cloudwatch',
-                        Action='lambda:InvokeFunction',
-                        Principal='events.amazonaws.com',
-                        SourceArn=rule_response['RuleArn'].split('/')[0]+'/*')
+                    FunctionName=CLOUDWATCH_TARGET,
+                    StatementId="allow_cloudwatch",
+                    Action="lambda:InvokeFunction",
+                    Principal="events.amazonaws.com",
+                    SourceArn=rule_response["RuleArn"].split("/")[0] + "/*",
+                )
             except:
-                logger.info('Permission already exists ')
+                logger.info("Permission already exists ")
             cloudWatchClient.put_targets(
                 Rule=job_name,
-                Targets=[
-                    {
-                        'Id': target_name,
-                        'Arn': CLOUDWATCH_TARGET,
-                        'Input': json.dumps(lambda_params)
-                    }
-                ]
+                Targets=[{"Id": target_name, "Arn": CLOUDWATCH_TARGET, "Input": json.dumps(lambda_params)}],
             )
 
     except Exception as e:
         exception_type, exception_value, exception_traceback = sys.exc_info()
         traceback_string = traceback.format_exception(exception_type, exception_value, exception_traceback)
-        err_msg = json.dumps({
-            "errorType": exception_type.__name__,
-            "errorMessage": str(exception_value),
-            "stackTrace": traceback_string,
-            "msg_exception": "Cloudwatch Event Exception: " + str(e)
-        })
+        err_msg = json.dumps(
+            {
+                "errorType": exception_type.__name__,
+                "errorMessage": str(exception_value),
+                "stackTrace": traceback_string,
+                "msg_exception": "Cloudwatch Event Exception: " + str(e),
+            }
+        )
         logger.error(err_msg)
         return
 
 
 def lambda_handler(event, context):
-    records = event['Records']
+    records = event["Records"]
     logger.info(records)
     for item in records:
-        event = item['eventName']
+        event = item["eventName"]
         logger.debug(event)
-        job_name = item['dynamodb']['Keys'].get('job_name', {}).get('S')
-        if str(event) == 'REMOVE':
+        job_name = item["dynamodb"]["Keys"].get("job_name", {}).get("S")
+        if str(event) == "REMOVE":
             logger.info("Deleting rule")
             remove_cloudwatch_rule(job_name)
             return
         else:
-            job_status = item['dynamodb']['NewImage'].get('job_status', {}).get('S', 'DISABLED')
-            crond_expression = item['dynamodb']['NewImage'].get('crond_expression', {}).get('S', 'crond(0 0 * * ? *)')
-            lambda_params = {'job_name':job_name}
+            job_status = item["dynamodb"]["NewImage"].get("job_status", {}).get("S", "DISABLED")
+            crond_expression = item["dynamodb"]["NewImage"].get("crond_expression", {}).get("S", "crond(0 0 * * ? *)")
+            lambda_params = {"job_name": job_name}
 
-            if str(event) == 'INSERT':
+            if str(event) == "INSERT":
                 logger.info("Creating rule")
                 put_cloudwatch_rule(job_name, crond_expression, job_status, lambda_params)
-            elif str(event) == 'MODIFY':
+            elif str(event) == "MODIFY":
                 logger.info("Updating rule")
                 logger.info("Deleting previous rule")
                 remove_cloudwatch_rule(job_name)

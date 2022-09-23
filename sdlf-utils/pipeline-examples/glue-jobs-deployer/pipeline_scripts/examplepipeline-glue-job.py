@@ -17,36 +17,79 @@ from pyspark.sql.window import Window
 # context initiation
 glueContext = GlueContext(SparkContext.getOrCreate())
 log = glueContext.get_logger()
-args = getResolvedOptions(sys.argv, ['DATASET', 'JOB_NAME', 'start_date_string', 'end_date_string'])
+args = getResolvedOptions(sys.argv, ["DATASET", "JOB_NAME", "start_date_string", "end_date_string"])
 sc = glueContext
 spark = glueContext.spark_session
 
 job = Job(glueContext)
-job.init(args['JOB_NAME'], args)
+job.init(args["JOB_NAME"], args)
 
 
 # properties handler
 class PropertiesHandler(object):
-
-    def __init__(self, startDateStr='', endDateStr='', startYearStr='', endYearStr='', startMonthStr='', endMonthStr='',
-                 startDayStr='', endDayStr='', targetTable='',
-                 targetTableBucketLocation='', targetTablePathLocation='', targetTableFQDN='',
-                 sourcePartitionYearField='',
-                 sourcePartitionMonthField='', sourcePartitionDayField='',
-                 maskedTargetDatabase='', maskedTargetTableBucketLocation='', columns2mask='',
-                 maskedTargetTableFQDN='', targetDatabase='', redshiftOutputTable='', executeRedshiftExport=False,
-                 outputToRedshift=False, redshiftCatalogConnection = '', logger=None, jobName='', logPath='',
-                 processStartTime='', useControlTable=False, sendCloudWatchLogs=False,
-                 cloudwatchLogGroup='SparkTransform', dynamoOutputTable = '',
-                 hasDtPartition=False, partitionValues={},dynamoOutputNumParallelTasks=None,
-                 redshiftTempBucket='', targetPartitionDtField='', sourcePartitionDtField='',
-                 redshiftDatabase='', createViews=True,
-                 useAnalyticsSecLayer=True, redshiftColumnsToExport='', dropDuplicates=False,
-                 sourcesDict={}, reprocessDates=[], processDatesCondition='', datePartitionsSeparated=False,
-                 isCdcTable=False, cdcTableKey='', jobId=0, executeSparkTransform=True, writeAsTable=True,
-                 cdcDatePartitionsToProcess=[], sparkPartitions=0, outputFormat='parquet',
-                 redshiftTempFormat='CSV GZIP', outputToDynamo=False, executeDynamoExport=False, env='dev',
-                 datasetName=''):
+    def __init__(
+        self,
+        startDateStr="",
+        endDateStr="",
+        startYearStr="",
+        endYearStr="",
+        startMonthStr="",
+        endMonthStr="",
+        startDayStr="",
+        endDayStr="",
+        targetTable="",
+        targetTableBucketLocation="",
+        targetTablePathLocation="",
+        targetTableFQDN="",
+        sourcePartitionYearField="",
+        sourcePartitionMonthField="",
+        sourcePartitionDayField="",
+        maskedTargetDatabase="",
+        maskedTargetTableBucketLocation="",
+        columns2mask="",
+        maskedTargetTableFQDN="",
+        targetDatabase="",
+        redshiftOutputTable="",
+        executeRedshiftExport=False,
+        outputToRedshift=False,
+        redshiftCatalogConnection="",
+        logger=None,
+        jobName="",
+        logPath="",
+        processStartTime="",
+        useControlTable=False,
+        sendCloudWatchLogs=False,
+        cloudwatchLogGroup="SparkTransform",
+        dynamoOutputTable="",
+        hasDtPartition=False,
+        partitionValues={},
+        dynamoOutputNumParallelTasks=None,
+        redshiftTempBucket="",
+        targetPartitionDtField="",
+        sourcePartitionDtField="",
+        redshiftDatabase="",
+        createViews=True,
+        useAnalyticsSecLayer=True,
+        redshiftColumnsToExport="",
+        dropDuplicates=False,
+        sourcesDict={},
+        reprocessDates=[],
+        processDatesCondition="",
+        datePartitionsSeparated=False,
+        isCdcTable=False,
+        cdcTableKey="",
+        jobId=0,
+        executeSparkTransform=True,
+        writeAsTable=True,
+        cdcDatePartitionsToProcess=[],
+        sparkPartitions=0,
+        outputFormat="parquet",
+        redshiftTempFormat="CSV GZIP",
+        outputToDynamo=False,
+        executeDynamoExport=False,
+        env="dev",
+        datasetName="",
+    ):
 
         # FW PROPERTIES
         self.startDateStr = startDateStr
@@ -112,117 +155,122 @@ class PropertiesHandler(object):
         self.outputFormat = outputFormat
 
     def fillProperties(self, config):
-        """Fills this object holder with json configs
-        """
+        """Fills this object holder with json configs"""
         # COMMON FRAMEWORK PROPERTIES
         sourceKeys = [key for key in config.keys() if key.startswith("source_database")]
         sourceValues = [config.get(key) for key in config.keys() if key.startswith("source_database")]
         for index, value in enumerate(sourceKeys, start=0):
             self.sourcesDict[sourceKeys[index]] = sourceValues[index]
 
-        if config.get('target_database') is not None:
-            self.targetDatabase = str(config.get('target_database'))
-            self.targetTable = str(config.get('target_table'))
+        if config.get("target_database") is not None:
+            self.targetDatabase = str(config.get("target_database"))
+            self.targetTable = str(config.get("target_table"))
         else:
-            self.targetTable =''
+            self.targetTable = ""
 
-        self.targetTableBucketLocation = str(config.get('target_table_bucket_location'))
-        self.targetTablePathLocation = str(config.get('target_table_path_location'))
+        self.targetTableBucketLocation = str(config.get("target_table_bucket_location"))
+        self.targetTablePathLocation = str(config.get("target_table_path_location"))
         self.targetTableFQDN = self.targetDatabase + "." + self.targetTable
 
-        if config.get('source_partition_year_field') is not None:
-            self.sourcePartitionYearField = str(config.get('source_partition_year_field'))
-            self.sourcePartitionMonthField = str(config.get('source_partition_month_field'))
-            self.sourcePartitionDayField = str(config.get('source_partition_day_field'))
+        if config.get("source_partition_year_field") is not None:
+            self.sourcePartitionYearField = str(config.get("source_partition_year_field"))
+            self.sourcePartitionMonthField = str(config.get("source_partition_month_field"))
+            self.sourcePartitionDayField = str(config.get("source_partition_day_field"))
             self.datePartitionsSeparated = True
-        elif config.get('source_partition_dt_field') is not None:
-            self.sourcePartitionDtField = str(config.get('source_partition_dt_field'))
+        elif config.get("source_partition_dt_field") is not None:
+            self.sourcePartitionDtField = str(config.get("source_partition_dt_field"))
             self.datePartitionsSeparated = False
 
-        if config.get('target_partition_dt_field') is not None:
+        if config.get("target_partition_dt_field") is not None:
             self.hasDtPartition = True
-            self.targetPartitionDtField = str(config.get('target_partition_dt_field'))
+            self.targetPartitionDtField = str(config.get("target_partition_dt_field"))
         else:
             self.hasDtPartition = False
 
-        self.processControlTable = str(config.get('process_control_table_name'))
+        self.processControlTable = str(config.get("process_control_table_name"))
 
-        if config.get('execute_spark_transform') is not None:
-            self.executeSparkTransform = str(config.get('execute_spark_transform')) == 'True'
+        if config.get("execute_spark_transform") is not None:
+            self.executeSparkTransform = str(config.get("execute_spark_transform")) == "True"
 
-        if config.get('write_as_table') is not None:
-            self.writeAsTable = str(config.get('write_as_table')) == 'True'
+        if config.get("write_as_table") is not None:
+            self.writeAsTable = str(config.get("write_as_table")) == "True"
         else:
             self.writeAsTable = True
 
-        if config.get('output_format') is not None:
-            self.outputFormat = str(config.get('output_format'))
+        if config.get("output_format") is not None:
+            self.outputFormat = str(config.get("output_format"))
         else:
-            self.outputFormat = 'parquet'
+            self.outputFormat = "parquet"
 
-        if config.get('spark_partitions_number') is not None:
-            self.sparkPartitions = int(config.get('spark_partitions_number'))
+        if config.get("spark_partitions_number") is not None:
+            self.sparkPartitions = int(config.get("spark_partitions_number"))
 
-        if config.get('use_analytics_sec_layer') is not None:
-            self.useAnalyticsSecLayer = str(config.get('use_analytics_sec_layer')) == 'True'
+        if config.get("use_analytics_sec_layer") is not None:
+            self.useAnalyticsSecLayer = str(config.get("use_analytics_sec_layer")) == "True"
 
         # DYNAMODB OUTPUT PROPERTIES
-        if config.get('execute_dynamo_export') is not None:
-            self.executeDynamoExport = str(config.get('execute_dynamo_export')) == 'True'
+        if config.get("execute_dynamo_export") is not None:
+            self.executeDynamoExport = str(config.get("execute_dynamo_export")) == "True"
         if self.executeDynamoExport:
-            self.dynamoOutputTable = str(config.get('dynamo_output_table'))
-            self.dynamoKey = str(config.get('dynamo_key'))
+            self.dynamoOutputTable = str(config.get("dynamo_output_table"))
+            self.dynamoKey = str(config.get("dynamo_key"))
             self.outputToDynamo = True
-            self.dynamoOutputNumParallelTasks = str(config.get('dynamo_output_num_parallel_tasks'))
+            self.dynamoOutputNumParallelTasks = str(config.get("dynamo_output_num_parallel_tasks"))
 
         # REDSHIFT OUTPUT PROPERTIES
-        if config.get('execute_redshift_export') is not None:
-            self.executeRedshiftExport = str(config.get('execute_redshift_export')) == 'True'
+        if config.get("execute_redshift_export") is not None:
+            self.executeRedshiftExport = str(config.get("execute_redshift_export")) == "True"
         if self.executeRedshiftExport:
-            self.redshiftOutputTable = str(config.get('redshift_output_table'))
+            self.redshiftOutputTable = str(config.get("redshift_output_table"))
             self.outputToRedshift = True
-            self.redshiftTempBucket = str(config.get('redshift_temp_bucket'))
-            self.redshiftDatabase = str(config.get('redshift_database'))
-            if config.get('redshift_columns_to_export') is not None:
-                self.redshiftColumnsToExport = str(config.get('redshift_columns_to_export'))
-            if config.get('redshift_temp_format') is not None:
-                self.redshiftTempFormat = str(config.get('redshift_temp_format'))
-            if config.get('redshift_catalog_connection') is not None:
-                self.redshiftCatalogConnection = str(config.get('redshift_catalog_connection'))
+            self.redshiftTempBucket = str(config.get("redshift_temp_bucket"))
+            self.redshiftDatabase = str(config.get("redshift_database"))
+            if config.get("redshift_columns_to_export") is not None:
+                self.redshiftColumnsToExport = str(config.get("redshift_columns_to_export"))
+            if config.get("redshift_temp_format") is not None:
+                self.redshiftTempFormat = str(config.get("redshift_temp_format"))
+            if config.get("redshift_catalog_connection") is not None:
+                self.redshiftCatalogConnection = str(config.get("redshift_catalog_connection"))
 
-        if config.get('is_cdc_table') is not None:
-            self.isCdcTable = str(config.get('is_cdc_table')) == 'True'
-            self.cdcTableKey = str(config.get('cdc_table_key'))
-        if config.get('drop_duplicates') is not None:
-            self.dropDuplicates = str(config.get('drop_duplicates')) == 'True'
+        if config.get("is_cdc_table") is not None:
+            self.isCdcTable = str(config.get("is_cdc_table")) == "True"
+            self.cdcTableKey = str(config.get("cdc_table_key"))
+        if config.get("drop_duplicates") is not None:
+            self.dropDuplicates = str(config.get("drop_duplicates")) == "True"
 
         # MASKET OUTPUT
-        self.maskedTargetDatabase = str(config.get('masked_target_database'))
+        self.maskedTargetDatabase = str(config.get("masked_target_database"))
         self.maskedTargetTableFQDN = self.maskedTargetDatabase + "." + self.targetTable
-        self.maskedTargetTableBucketLocation = str(config.get('masked_target_table_bucket_location'))
-        self.columns2mask = str(config.get('columns2mask'))
+        self.maskedTargetTableBucketLocation = str(config.get("masked_target_table_bucket_location"))
+        self.columns2mask = str(config.get("columns2mask"))
 
 
 # helper functions
 def getCurrentMilliTime():
     return int(round(time.time() * 1000))
+
+
 def eliminateDuplicates(listToVerify):
     return list(dict.fromkeys(listToVerify))
+
+
 def finish_job_ok():
     job.commit()
+
+
 def finish_job_fail(err):
-    raise Exception("{}:Exception raised: {}".format(args['JOB_NAME'], err))
+    raise Exception("{}:Exception raised: {}".format(args["JOB_NAME"], err))
 
 
 def getSourceTables(sqlContent, props):
     tables = []
     lines = sqlContent.splitlines()
     for line in lines:
-        line = line.replace('\n', '')
+        line = line.replace("\n", "")
         wordsInLine = line.split(" ")
         for word in wordsInLine:
             finalWord = word.strip()
-            if finalWord.startswith('$SOURCE_DATABASE'):
+            if finalWord.startswith("$SOURCE_DATABASE"):
                 sourceDatabase = props.sourcesDict.get(finalWord.split(".")[0].replace("$", "").lower())
                 table = finalWord.split(".")[1]
                 tables.append(sourceDatabase + "." + table)
@@ -231,17 +279,16 @@ def getSourceTables(sqlContent, props):
 
 
 def setupConfig():
-    """Configures the properties object read from json config_nonprod file
-    """
+    """Configures the properties object read from json config_nonprod file"""
     global sqlContent, params, s3, s3Client, dynamodb_client, stringParams, sourceTables
-    s3 = boto3.resource('s3', region_name='us-east-1')
-    s3Client = boto3.client('s3', region_name='us-east-1')
-    dynamodb_client = boto3.resource('dynamodb', region_name='us-east-1')
+    s3 = boto3.resource("s3", region_name="us-east-1")
+    s3Client = boto3.client("s3", region_name="us-east-1")
+    dynamodb_client = boto3.resource("dynamodb", region_name="us-east-1")
 
-    props.jobName = args['JOB_NAME']
-    props.datasetName = args['DATASET']
-    props.startDateStr = args['start_date_string']
-    props.endDateStr = args['end_date_string']
+    props.jobName = args["JOB_NAME"]
+    props.datasetName = args["DATASET"]
+    props.startDateStr = args["start_date_string"]
+    props.endDateStr = args["end_date_string"]
 
     dateSplit = props.startDateStr.split("-")
     props.startYearStr = dateSplit[0]
@@ -249,28 +296,28 @@ def setupConfig():
     props.startMonthStr = dateSplit[1]
     props.startDayStr = dateSplit[2]
 
-    log.info('Processing: ' + str(props.jobName))
+    log.info("Processing: " + str(props.jobName))
 
-    with open('{}.json'.format(dataset)) as file:
+    with open("{}.json".format(dataset)) as file:
         jsonContent = file.read()
-        ssm_client = boto3.client('ssm')
-        env = ssm_client.get_parameter(Name='/SDLF/Misc/pEnv')['Parameter']['Value']
+        ssm_client = boto3.client("ssm")
+        env = ssm_client.get_parameter(Name="/SDLF/Misc/pEnv")["Parameter"]["Value"]
         accountid = boto3.client("sts").get_caller_identity().get("Account")
         props.env = env
         jsonContent = jsonContent.replace("$ENV", env)
         jsonContent = jsonContent.replace("$ACCOUNTID", accountid)
-        athena_bucket = ssm_client.get_parameter(Name='/SDLF/S3/AthenaBucket')['Parameter']['Value']
+        athena_bucket = ssm_client.get_parameter(Name="/SDLF/S3/AthenaBucket")["Parameter"]["Value"]
         jsonContent = jsonContent.replace("$AthenaBucket", athena_bucket)
-        analytics_bucket = ssm_client.get_parameter(Name='/SDLF/S3/AnalyticsBucket')['Parameter']['Value']
+        analytics_bucket = ssm_client.get_parameter(Name="/SDLF/S3/AnalyticsBucket")["Parameter"]["Value"]
         jsonContent = jsonContent.replace("$AnalyticsBucket", analytics_bucket)
-        analyticssec_bucket = ssm_client.get_parameter(Name='/SDLF/S3/AnalyticsSecBucket')['Parameter']['Value']
+        analyticssec_bucket = ssm_client.get_parameter(Name="/SDLF/S3/AnalyticsSecBucket")["Parameter"]["Value"]
         jsonContent = jsonContent.replace("$AnalyticsSecBucket", analyticssec_bucket)
         params = json.loads(jsonContent)
 
     props.fillProperties(params)
     props.jobId = getCurrentMilliTime()
 
-    with open('{}.sql'.format(dataset)) as file:
+    with open("{}.sql".format(dataset)) as file:
         sqlContent = file.read()
 
     sourceTables = getSourceTables(sqlContent, props)
@@ -279,7 +326,7 @@ def setupConfig():
         log.info("target_database: {}".format(props.targetDatabase))
         log.info("target_table: {}".format(props.targetTable))
     except:
-        log.error('Error when logging in setupConfig. It could be due to non recognized characters')
+        log.error("Error when logging in setupConfig. It could be due to non recognized characters")
     return
 
 
@@ -290,7 +337,7 @@ def getTablePartitionFields():
     tablePartitionFields = []
     inPartitionSection = False
     for elem in schemaTmp:
-        if elem[0] == ('# col_name'):
+        if elem[0] == ("# col_name"):
             inPartitionSection = True
             continue
         if inPartitionSection:
@@ -304,7 +351,7 @@ def getTableFields():
     schemaTmp = schemaDF.collect()
     schemaDict = OrderedDict()
     for elem in schemaTmp:
-        if elem[0] not in ('# col_name', '# Partition Information'):
+        if elem[0] not in ("# col_name", "# Partition Information"):
             schemaDict[elem[0]] = elem[1]
         else:
             break  # this is to avoid the partition fields in the describe
@@ -322,7 +369,7 @@ def getDateRange(props):
 
 
 def getSourceTimeCondition(props):
-    condition = '( '
+    condition = "( "
     parameterDates = getDateRange(props)
     parameterDates = parameterDates + props.reprocessDates
     datesToProcess = eliminateDuplicates(parameterDates)
@@ -331,27 +378,39 @@ def getSourceTimeCondition(props):
             year = date.split("-")[0]
             month = date.split("-")[1]
             day = date.split("-")[2]
-            condition += "( " + props.sourcePartitionYearField + " = '" + year + "' AND " \
-                         + props.sourcePartitionMonthField + " = '" + month + "' AND " \
-                         + props.sourcePartitionDayField + " = '" + day + "' ) OR "
+            condition += (
+                "( "
+                + props.sourcePartitionYearField
+                + " = '"
+                + year
+                + "' AND "
+                + props.sourcePartitionMonthField
+                + " = '"
+                + month
+                + "' AND "
+                + props.sourcePartitionDayField
+                + " = '"
+                + day
+                + "' ) OR "
+            )
     else:
         for date in datesToProcess:
             condition += "( " + props.sourcePartitionDtField + " = '" + date + "' )  OR "
     condition = condition[:-3]
-    condition += ')'
+    condition += ")"
     return condition
 
 
 def deleteBucketPath(pathToDelete, targetTableBucketLocation):
-    log.info('prefix to delete:::' + targetTableBucketLocation + '/' + pathToDelete)
+    log.info("prefix to delete:::" + targetTableBucketLocation + "/" + pathToDelete)
     try:
         bucket = s3.Bucket(targetTableBucketLocation)
         bucket.objects.filter(Prefix=pathToDelete).delete()
         if not props.hasDtPartition:
             time.sleep(1)
-            s3Client.put_object(Bucket=targetTableBucketLocation, Body='', Key=pathToDelete + '/')
+            s3Client.put_object(Bucket=targetTableBucketLocation, Body="", Key=pathToDelete + "/")
     except Exception as x:
-        err = 'Unable to delete partition from S3. ERROR : ' + str(x)
+        err = "Unable to delete partition from S3. ERROR : " + str(x)
         log.error(err)
         finish_job_fail(err)
 
@@ -375,14 +434,13 @@ def getDateRangePartitions(props):
 
 
 def deleteOldData(targetTableBucketLocation):
-    """Drops data directly in s3 to overwrite insert into operations in partitioned tables
-    """
+    """Drops data directly in s3 to overwrite insert into operations in partitioned tables"""
     # spark.sql("DROP TABLE IF EXISTS " + props.targetTableFQDN )
     # spark.sql("TRUNCATE TABLE " + props.targetTableFQDN )
-    log.info('Table Bucket:::' + targetTableBucketLocation)
+    log.info("Table Bucket:::" + targetTableBucketLocation)
 
     partitions = []
-    partitionToDelete = ''
+    partitionToDelete = ""
     # KillAndFill table
     if not props.hasDtPartition and len(props.partitionValues) == 0:
         pathToDelete = props.targetTablePathLocation
@@ -395,8 +453,9 @@ def deleteOldData(targetTableBucketLocation):
     if props.hasDtPartition and len(props.partitionValues) == 0:
         datePartitions = getDateRangePartitions(props)
         if props.isCdcTable:
-            datePartitions = [props.targetPartitionDtField + "=" + datePartition for datePartition in
-                              props.cdcDatePartitionsToProcess]
+            datePartitions = [
+                props.targetPartitionDtField + "=" + datePartition for datePartition in props.cdcDatePartitionsToProcess
+            ]
         for partitionToDelete in datePartitions:
             # if the table has other partition different than 1 date partitions, but are asking only for the date partition
             if len(tablePartitionFields) > 1:
@@ -407,8 +466,9 @@ def deleteOldData(targetTableBucketLocation):
     # Case 2 - doesn't have date partition but has other partitions.  Assumption: you can ask only for one value per partition level.
     elif not props.hasDtPartition and len(props.partitionValues) > 0:
         for partitionFieldNameToDelete in props.partitionValues:
-            partitionToDelete += partitionFieldNameToDelete + "=" + props.partitionValues[
-                partitionFieldNameToDelete] + "/"
+            partitionToDelete += (
+                partitionFieldNameToDelete + "=" + props.partitionValues[partitionFieldNameToDelete] + "/"
+            )
         partitionToDelete = partitionToDelete[:-1]
         if partitionToDelete in partitions:
             pathToDelete = props.targetTablePathLocation + "/" + partitionToDelete
@@ -417,15 +477,16 @@ def deleteOldData(targetTableBucketLocation):
     elif props.hasDtPartition and len(props.partitionValues) > 0:
         for dtPartitionToDelete in getDateRangePartitions(props):
             for partitionFieldNameToDelete in props.partitionValues:
-                partitionToDelete += partitionFieldNameToDelete + "=" + props.partitionValues[
-                    partitionFieldNameToDelete] + "/"
+                partitionToDelete += (
+                    partitionFieldNameToDelete + "=" + props.partitionValues[partitionFieldNameToDelete] + "/"
+                )
             partitionToDelete = partitionToDelete[:-1]
             completePartition = dtPartitionToDelete + "/" + partitionToDelete
 
             if completePartition in partitions:
                 pathToDelete = props.targetTablePathLocation + "/" + completePartition
                 deleteBucketPath(pathToDelete, targetTableBucketLocation)
-            partitionToDelete = ''
+            partitionToDelete = ""
 
 
 def getCdcPartitionsToProcess(dfSource):
@@ -435,13 +496,13 @@ def getCdcPartitionsToProcess(dfSource):
 
 
 def createAnalyticsFolderIfNotExists(props):
-    pathToCreate = props.targetTablePathLocation + '/'
-    log.info('prefix to create for cdc kill and fill:::' + pathToCreate)
+    pathToCreate = props.targetTablePathLocation + "/"
+    log.info("prefix to create for cdc kill and fill:::" + pathToCreate)
     try:
-        s3Client.put_object(Bucket=props.targetTableBucketLocation, Body='', Key=pathToCreate)
+        s3Client.put_object(Bucket=props.targetTableBucketLocation, Body="", Key=pathToCreate)
         time.sleep(1)
     except Exception as x:
-        log.error('cdc kill and fill path already exists ... continue : ')
+        log.error("cdc kill and fill path already exists ... continue : ")
 
 
 def createCdcTempTableSQL(props):
@@ -451,15 +512,16 @@ def createCdcTempTableSQL(props):
         for date in props.cdcDatePartitionsToProcess:
             createTempTableSql += "'" + date + "',"
         createTempTableSql = createTempTableSql[:-1]
-        createTempTableSql += ')'
+        createTempTableSql += ")"
     tempDf = spark.sql(createTempTableSql)
     tempDf.write.mode("overwrite").format("parquet").saveAsTable(
-        props.targetDatabase + "._" + props.targetTable + "_temp")
+        props.targetDatabase + "._" + props.targetTable + "_temp"
+    )
     return createTempTableSql
 
 
 def mergeCdcData(mergedDfTarget, primaryKeyArray, orderByField):
-    """ Combine data and get the latest row out for a primary key based on the change_order_by key
+    """Combine data and get the latest row out for a primary key based on the change_order_by key
     :param mergeddfTarget: dataframe with old and new records
     :param primary_key: database primary
     :param change_order_by: by time - last updated timestamp
@@ -469,7 +531,8 @@ def mergeCdcData(mergedDfTarget, primaryKeyArray, orderByField):
     mergedTargetRanked = mergedDfTarget.withColumn("order_inc_rank", F.row_number().over(win))
     mergeTargetRankedWithoutDuplicates = mergedTargetRanked.dropDuplicates()
     rowsWithLatestUpdatesDf = mergeTargetRankedWithoutDuplicates.filter(
-        mergeTargetRankedWithoutDuplicates.order_inc_rank == 1)
+        mergeTargetRankedWithoutDuplicates.order_inc_rank == 1
+    )
     rowsWithLatestUpdatesDf = rowsWithLatestUpdatesDf.drop("order_inc_rank")
     return rowsWithLatestUpdatesDf
 
@@ -484,7 +547,8 @@ def processCdcFlow(props, newDF):
         deleteOldData(props.targetTableBucketLocation)
     if props.sparkPartitions > 0:
         updatedTarget.coalesce(props.sparkPartitions).write.mode("overwrite").format("parquet").insertInto(
-            props.targetTableFQDN)
+            props.targetTableFQDN
+        )
     else:
         updatedTarget.write.mode("overwrite").format("parquet").insertInto(props.targetTableFQDN)
 
@@ -496,7 +560,7 @@ def writeTableToTargetBucket():
         getTableFields()
     props.processDatesCondition = getSourceTimeCondition(props)
 
-    queryHql = sqlContent.replace('\t', '    ')
+    queryHql = sqlContent.replace("\t", "    ")
     queryHql = queryHql.replace("$TARGET_DATABASE", "'" + props.targetDatabase + "'")
     queryHql = queryHql.replace("$START_DATE", "'" + props.startDateStr + "'")
     queryHql = queryHql.replace("$END_DATE", "'" + props.endDateStr + "'")
@@ -512,15 +576,16 @@ def writeTableToTargetBucket():
         queryHql = queryHql.replace("$VALUE_" + str(index), value)
 
     for value in props.sourcesDict.keys():
-        if value == 'source_database':
+        if value == "source_database":
             queryHql = queryHql.replace("$SOURCE_DATABASE.", props.sourcesDict[value] + ".")
         else:
-            queryHql = queryHql.replace("$SOURCE_DATABASE_" + value.split("_")[-1] + ".",
-                                        props.sourcesDict[value] + ".")
+            queryHql = queryHql.replace(
+                "$SOURCE_DATABASE_" + value.split("_")[-1] + ".", props.sourcesDict[value] + "."
+            )
 
     log.info("JOB_ID::: " + str(props.jobId))
 
-    queryHql = queryHql.replace('$JOB_ID', str(props.jobId))
+    queryHql = queryHql.replace("$JOB_ID", str(props.jobId))
 
     if not props.isCdcTable:
         deleteOldData(props.targetTableBucketLocation)
@@ -534,7 +599,7 @@ def writeTableToTargetBucket():
     log.info("sql: " + queryHql)
     try:
         resultDf = spark.sql(queryHql)
-        log.info('Query executed')
+        log.info("Query executed")
         if props.isCdcTable:
             if props.hasDtPartition:
                 props.cdcDatePartitionsToProcess = getCdcPartitionsToProcess(resultDf)
@@ -544,11 +609,11 @@ def writeTableToTargetBucket():
             time.sleep(2)
 
     except Exception as x:
-        err = 'Unable to process SQL query. ERROR : ' + str(x)
+        err = "Unable to process SQL query. ERROR : " + str(x)
         log.error(err)
         finish_job_fail(err)
 
-    if props.dropDuplicates==True:
+    if props.dropDuplicates == True:
         resultDf = resultDf.dropDuplicates()
 
     if props.isCdcTable:
@@ -556,32 +621,29 @@ def writeTableToTargetBucket():
     else:
         if props.sparkPartitions > 0:
             if props.writeAsTable:
-                resultDf.coalesce(props.sparkPartitions)\
-                    .write.mode("overwrite")\
-                    .format(props.outputFormat)\
-                    .insertInto(props.targetTableFQDN, overwrite=True)
+                resultDf.coalesce(props.sparkPartitions).write.mode("overwrite").format(props.outputFormat).insertInto(
+                    props.targetTableFQDN, overwrite=True
+                )
             else:
-                resultDf.coalesce(props.sparkPartitions).write.mode("overwrite")\
-                    .format(props.outputFormat) \
-                    .option('header','true') \
-                    .save('s3://'+props.targetTableBucketLocation+'/'+props.targetTablePathLocation+'/')
+                resultDf.coalesce(props.sparkPartitions).write.mode("overwrite").format(props.outputFormat).option(
+                    "header", "true"
+                ).save("s3://" + props.targetTableBucketLocation + "/" + props.targetTablePathLocation + "/")
         else:
             if props.writeAsTable:
-                resultDf.write.mode("overwrite")\
-                    .format(props.outputFormat)\
-                    .insertInto(props.targetTableFQDN, overwrite=True)
+                resultDf.write.mode("overwrite").format(props.outputFormat).insertInto(
+                    props.targetTableFQDN, overwrite=True
+                )
             else:
-                resultDf.write.mode("overwrite")\
-                    .format(props.outputFormat) \
-                    .option('header', 'true') \
-                    .save('s3://'+props.targetTableBucketLocation+'/'+props.targetTablePathLocation+'/')
+                resultDf.write.mode("overwrite").format(props.outputFormat).option("header", "true").save(
+                    "s3://" + props.targetTableBucketLocation + "/" + props.targetTablePathLocation + "/"
+                )
 
     log.info("Query finished.")
     return
 
 
 def getTargetTimeCondition(props):
-    condition = '( '
+    condition = "( "
     parameterDates = getDateRange(props)
     parameterDates = parameterDates + props.reprocessDates
     datesToProcess = eliminateDuplicates(parameterDates)
@@ -590,7 +652,7 @@ def getTargetTimeCondition(props):
     for date in datesToProcess:
         condition += "( " + props.targetPartitionDtField + " = '" + date + "' )  OR "
     condition = condition[:-3]
-    condition += ')'
+    condition += ")"
     return condition
 
 
@@ -614,18 +676,19 @@ def constructQueryPredicate(table):
         select = select[:-4]
     return select
 
+
 def writeTableToRedshift():
-    selectExportSQL = 'select '
+    selectExportSQL = "select "
 
     if not props.executeSparkTransform:
         getTableFields()
 
-    if props.redshiftColumnsToExport != '':
+    if props.redshiftColumnsToExport != "":
         selectExportSQL += props.redshiftColumnsToExport + " "
     else:
         for field in schemaDict:
             configField = field
-            selectExportSQL += configField + ','
+            selectExportSQL += configField + ","
         selectExportSQL = selectExportSQL[:-1]
     selectExportSQL += constructQueryPredicate(props.targetTableFQDN)
 
@@ -635,23 +698,26 @@ def writeTableToRedshift():
     sqlDeleteRedshift = "delete " + constructQueryPredicate(props.redshiftOutputTable)
 
     try:
-        glueContext.write_dynamic_frame.from_jdbc_conf(frame=resultDynamicFrame,
-                                                       catalog_connection=props.redshiftCatalogConnection,
-                                                       connection_options={
-                                                           "preactions": sqlDeleteRedshift,
-                                                           "dbtable": props.redshiftOutputTable,
-                                                           "database": props.redshiftDatabase},
-                                                       redshift_tmp_dir="s3://" + props.redshiftTempBucket + "/")
+        glueContext.write_dynamic_frame.from_jdbc_conf(
+            frame=resultDynamicFrame,
+            catalog_connection=props.redshiftCatalogConnection,
+            connection_options={
+                "preactions": sqlDeleteRedshift,
+                "dbtable": props.redshiftOutputTable,
+                "database": props.redshiftDatabase,
+            },
+            redshift_tmp_dir="s3://" + props.redshiftTempBucket + "/",
+        )
     except Exception as x:
-        err = 'Unable to export data in Redshift Table. ERROR : ' + str(x)
+        err = "Unable to export data in Redshift Table. ERROR : " + str(x)
         log.error(err)
         finish_job_fail(err)
 
 
 def writeTableToDynamo():
-    selectViewSQL = 'select * '
+    selectViewSQL = "select * "
     selectViewSQL += constructQueryPredicate(props.targetTableFQDN)
-    #should be unique value to be able to inster in dynamodb
+    # should be unique value to be able to inster in dynamodb
     resultDf = spark.sql(selectViewSQL).dropDuplicates([props.dynamoKey])
     resultDynamicFrame = DynamicFrame.fromDF(resultDf, glueContext, props.dynamoOutputTable)
     log.info("field Types:" + str(resultDynamicFrame.schema()))
@@ -664,10 +730,10 @@ def writeTableToDynamo():
                     "dynamodb.output.tableName": props.dynamoOutputTable,
                     "dynamodb.output.key": props.dynamoKey,
                     "dynamodb.throughput.write.percent": "1.5",
-                    "dynamodb.output.numParallelTasks": props.dynamoOutputNumParallelTasks
-                }
+                    "dynamodb.output.numParallelTasks": props.dynamoOutputNumParallelTasks,
+                },
             )
-            log.info('Result exported to DynamoDB')
+            log.info("Result exported to DynamoDB")
         else:
             glueContext.write_dynamic_frame_from_options(
                 frame=resultDynamicFrame,
@@ -675,12 +741,12 @@ def writeTableToDynamo():
                 connection_options={
                     "dynamodb.output.tableName": props.dynamoOutputTable,
                     "dynamodb.output.key": props.dynamoKey,
-                    "dynamodb.throughput.write.percent": "1.5"
-                }
+                    "dynamodb.throughput.write.percent": "1.5",
+                },
             )
-            log.info('Result exported to DynamoDB')
+            log.info("Result exported to DynamoDB")
     except Exception as x:
-        err = 'Unable to export data in DynamoDB Table. ERROR : ' + str(x)
+        err = "Unable to export data in DynamoDB Table. ERROR : " + str(x)
         log.error(err)
         finish_job_fail(err)
 
@@ -691,25 +757,33 @@ def writeTableToMaskedBucket():
     select = "select "
 
     colslist = {}
-    for col in props.columns2mask.split(';'):
+    for col in props.columns2mask.split(";"):
         colsdir = {}
-        colsdir["prefixLength"] = col.rsplit('(', 1)[1].replace(')', '').split(',')[0]
-        colsdir["sufixLength"] = col.rsplit('(', 1)[1].replace(')', '').split(',')[1]
-        colslist[col.rsplit('(', 1)[0]] = colsdir
+        colsdir["prefixLength"] = col.rsplit("(", 1)[1].replace(")", "").split(",")[0]
+        colsdir["sufixLength"] = col.rsplit("(", 1)[1].replace(")", "").split(",")[1]
+        colslist[col.rsplit("(", 1)[0]] = colsdir
 
     for field in schemaDict:
         if field in colslist.keys():
             configField = colslist[field]
-            select += ' CONCAT( '
-            select += ' substring(cast(' + field + ' as string), 0 ,' + configField['prefixLength'] + ') , '
-            select += ' md5(cast(' + field + ' as string))'
-            select += ' , substring(cast(' + field + ' as string), -' + configField['sufixLength'] + ' ,' + configField['sufixLength'] + ') '
-            select += ' ) '
-            select += ' as ' + field + ' ,'
+            select += " CONCAT( "
+            select += " substring(cast(" + field + " as string), 0 ," + configField["prefixLength"] + ") , "
+            select += " md5(cast(" + field + " as string))"
+            select += (
+                " , substring(cast("
+                + field
+                + " as string), -"
+                + configField["sufixLength"]
+                + " ,"
+                + configField["sufixLength"]
+                + ") "
+            )
+            select += " ) "
+            select += " as " + field + " ,"
         elif props.targetPartitionDtField != field and field not in tablePartitionFields:
-            select += field + ','
+            select += field + ","
     for field in tablePartitionFields:
-        select += field + ','
+        select += field + ","
 
     select = select[:-1]
     select += constructQueryPredicate(props.targetTableFQDN)
@@ -722,7 +796,7 @@ def writeTableToMaskedBucket():
 
 
 # Main flow
-dataset = args['DATASET']
+dataset = args["DATASET"]
 global props
 processStartTime = getCurrentMilliTime()
 props = PropertiesHandler()

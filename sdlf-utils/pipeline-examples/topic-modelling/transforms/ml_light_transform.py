@@ -37,10 +37,10 @@ s3_interface = S3Interface()
 stage_bucket = S3Configuration().stage_bucket
 
 logger = init_logger(__name__)
-s3client = boto3.client('s3')
+s3client = boto3.client("s3")
 
 
-class CustomTransform():
+class CustomTransform:
     def __init__(self):
         logger.info("S3 Blueprint Light Transform initiated")
 
@@ -55,37 +55,34 @@ class CustomTransform():
         #   Bucket: Raw Bucket in S3
         #   Key : (e.g. /engineering/medicalresearch/data.csv)
         obj = s3client.get_object(Bucket=bucket, Key=key)
-        medical_data = pd.read_csv(io.BytesIO(obj['Body'].read()))
+        medical_data = pd.read_csv(io.BytesIO(obj["Body"].read()))
         medical_data.dropna(subset=["abstract"], inplace=True)
-        medical_data_clean = medical_data[[
-            'title', 'abstract', 'url', 'publish_time', 'authors']]
+        medical_data_clean = medical_data[["title", "abstract", "url", "publish_time", "authors"]]
 
         # Get the KMS Key to encrypt the data we ultimately write to s3
         kms_key = KMSConfiguration(team).get_kms_arn
 
         # Now we add each abstract text as a new file in the s3 directory
         docnames = []
-        filename = key.split('/')[-1].split('.csv')[0]
+        filename = key.split("/")[-1].split(".csv")[0]
         for index, row in medical_data_clean.iterrows():
 
             # Detect Language of the abstract and write txt file (if not English we drop the row)
             # NOTE: Only one language will both help Topic Model Results and
             # MultiLabel Classifier Must Specify Language
             try:
-                language = detect(medical_data_clean['abstract'][index])
+                language = detect(medical_data_clean["abstract"][index])
             except Exception as e:
-                language = ''
+                language = ""
 
-            if language == 'en':
-                f_path = 'abstract_doc_{}_{}.txt'.format(filename, str(index))
+            if language == "en":
+                f_path = "abstract_doc_{}_{}.txt".format(filename, str(index))
                 docnames.append(f_path)
-                with open('/tmp/' + f_path, 'w', encoding='utf-8') as file:
+                with open("/tmp/" + f_path, "w", encoding="utf-8") as file:
                     file.write(medical_data_clean["abstract"][index])
                     file.close()
-                s3_path_docs = 'pre-stage/{}/{}/abstract_documents/{}'.format(
-                    team, dataset, f_path)
-                s3_interface.upload_object(
-                    '/tmp/' + f_path, stage_bucket, s3_path_docs, kms_key=kms_key)
+                s3_path_docs = "pre-stage/{}/{}/abstract_documents/{}".format(team, dataset, f_path)
+                s3_interface.upload_object("/tmp/" + f_path, stage_bucket, s3_path_docs, kms_key=kms_key)
 
             # Else if not English we drop the row
             else:
@@ -93,7 +90,7 @@ class CustomTransform():
 
         # Adding the unique docnames to  each of the files we saved in s3
         # So that we can later match docnames metadata to their topic output
-        medical_data_clean['docname'] = docnames
+        medical_data_clean["docname"] = docnames
 
         # Saving Metadata by appending to existing csv in s3
         output_path = "{}_cleaned.csv".format(filename)
@@ -101,11 +98,9 @@ class CustomTransform():
 
         # Uploading file to Stage bucket at appropriate path
         # IMPORTANT: Build the output s3_path without the s3://stage-bucket/
-        s3_path = 'pre-stage/{}/{}/medical_data/{}'.format(
-            team, dataset, output_path)
+        s3_path = "pre-stage/{}/{}/medical_data/{}".format(team, dataset, output_path)
         # IMPORTANT: Notice "stage_bucket" not "bucket"
-        s3_interface.upload_object(
-            "/tmp/" + output_path, stage_bucket, s3_path, kms_key=kms_key)
+        s3_interface.upload_object("/tmp/" + output_path, stage_bucket, s3_path, kms_key=kms_key)
 
         # Return the location of the s3 text files we wrote for the Topic Model Job
         # IMPORTANT S3 path(s) must be stored in a list

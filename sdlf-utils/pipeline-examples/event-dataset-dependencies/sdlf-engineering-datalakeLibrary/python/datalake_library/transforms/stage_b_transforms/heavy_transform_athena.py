@@ -40,11 +40,11 @@ s3_interface = S3Interface()
 stage_bucket = S3Configuration().stage_bucket
 # artifacts bucket where .sql file is stored
 artifacts_bucket = S3Configuration().artifacts_bucket
-athena_client = boto3.client('athena')
-glue_client = boto3.client('glue')
+athena_client = boto3.client("athena")
+glue_client = boto3.client("glue")
 
 
-class CustomTransform():
+class CustomTransform:
     def __init__(self):
         logger.info("Athena Heavy Transform initiated")
 
@@ -58,62 +58,59 @@ class CustomTransform():
         # full_table_path = pre-stage/datateam/dataset/TBL_42K_MDL/dt=partitionvalue
 
         def get_table_info(database, table):
-            glue_response = glue_client.get_table(
-                DatabaseName=database,
-                Name=table)
-            logger.debug('Glue get_table response: {}'.format(glue_response))
-            table_location = glue_response['Table']['StorageDescriptor']['Location']
-            table_columns = glue_response['Table']['StorageDescriptor']['Columns']
-            table_bucket = table_location.split('/')[2]
+            glue_response = glue_client.get_table(DatabaseName=database, Name=table)
+            logger.debug("Glue get_table response: {}".format(glue_response))
+            table_location = glue_response["Table"]["StorageDescriptor"]["Location"]
+            table_columns = glue_response["Table"]["StorageDescriptor"]["Columns"]
+            table_bucket = table_location.split("/")[2]
             # table_partition = ''
             table_path = table_location.split(table_bucket + "/")[1]
             return table_bucket, table_path, table_columns
 
         try:
-            logger.debug(f'body: {body}')
+            logger.debug(f"body: {body}")
             # table_name = body['model']
-            table_name = body['dest_table']['name']
-            db = body['dest_db']
-            behaviour = body.get('behaviour', 'append')
-            dest_part_name = body['dest_table'].get('part_name', None)
-            dest_part_value = body['dest_table'].get('part_value', None)
-            date_substitutions = body.get('date_substitutions',[])
+            table_name = body["dest_table"]["name"]
+            db = body["dest_db"]
+            behaviour = body.get("behaviour", "append")
+            dest_part_name = body["dest_table"].get("part_name", None)
+            dest_part_value = body["dest_table"].get("part_value", None)
+            date_substitutions = body.get("date_substitutions", [])
             logger.info(table_name)
             # partition_value = ''
-            job_name = f'sdlf-{team}-{dataset}-{table_name}'  # Name of the Athena query without .sql
+            job_name = f"sdlf-{team}-{dataset}-{table_name}"  # Name of the Athena query without .sql
             # sql_file_create_key = 'artifacts/athena_queries/sdlf-datateam-dataset-dev_funnel_dataset-create.sql'
             # sql_file_insert_key = 'artifacts/athena_queries/sdlf-datateam-dataset-dev_funnel_dataset-insert.sql'
             target_table_bucket, target_table_path, target_table_columns = get_table_info(db, table_name)
             if dest_part_name and dest_part_value:
-                target_table_full_path = f'{target_table_path}/{dest_part_name}={dest_part_value}'
+                target_table_full_path = f"{target_table_path}/{dest_part_name}={dest_part_value}"
                 target_table_path = target_table_full_path
-            if behaviour == 'overwrite':
+            if behaviour == "overwrite":
                 keys_to_delete = s3_interface.list_objects(target_table_bucket, target_table_path)
-                logger.info(f'Files to delete: {keys_to_delete}')
+                logger.info(f"Files to delete: {keys_to_delete}")
                 if keys_to_delete:
                     s3_interface.delete_objects(target_table_bucket, target_table_path)
-            steps = body['steps']
+            steps = body["steps"]
             num_of_steps = len(steps)
             job_details = {
-                'steps': steps,
-                'num_of_steps': num_of_steps,
-                'current_step': 0,
-                'jobStatus': 'STARTING_NEXT_QUERY'
+                "steps": steps,
+                "num_of_steps": num_of_steps,
+                "current_step": 0,
+                "jobStatus": "STARTING_NEXT_QUERY",
             }
-            response = {
-                'processedKeysPath': target_table_path,
-                'jobDetails': job_details
-            }
+            response = {"processedKeysPath": target_table_path, "jobDetails": job_details}
             return response
 
         except Exception as exp:
             exception_type, exception_value, exception_traceback = sys.exc_info()
             traceback_string = traceback.format_exception(exception_type, exception_value, exception_traceback)
-            err_msg = json.dumps({
-                "errorType": exception_type.__name__,
-                "errorMessage": str(exception_value),
-                "stackTrace": traceback_string
-            })
+            err_msg = json.dumps(
+                {
+                    "errorType": exception_type.__name__,
+                    "errorMessage": str(exception_value),
+                    "stackTrace": traceback_string,
+                }
+            )
             logger.error(err_msg)
 
     def check_job_status(self, bucket, body, processed_keys_path, job_details):
@@ -122,9 +119,7 @@ class CustomTransform():
         def run_athena_query(query_string, db_string, athena_workgroup):
             query_execution_id = athena_client.start_query_execution(
                 QueryString=query_string,
-                QueryExecutionContext={
-                    'Database': db_string
-                },
+                QueryExecutionContext={"Database": db_string},
                 WorkGroup=athena_workgroup
                 # !!!!!!! Create this workgroup and assign it the s3 athena bucket
                 #######################################################
@@ -134,100 +129,100 @@ class CustomTransform():
             return query_execution_id
 
         def athena_status(query_execution_id):
-            state = 'QUEUED'
-            while state == 'QUEUED':
+            state = "QUEUED"
+            while state == "QUEUED":
                 query_response = athena_client.get_query_execution(
-                    QueryExecutionId=query_execution_id['QueryExecutionId'])
-                logger.info(f'Executing - query id: {query_execution_id}')
-                if 'QueryExecution' in query_response and \
-                        'Status' in query_response['QueryExecution'] and \
-                        'State' in query_response['QueryExecution']['Status']:
-                    state = query_response['QueryExecution']['Status']['State']
-                    error = ''
-                    if state == 'FAILED':
-                        error = query_response['QueryExecution']['Status']['StateChangeReason']
+                    QueryExecutionId=query_execution_id["QueryExecutionId"]
+                )
+                logger.info(f"Executing - query id: {query_execution_id}")
+                if (
+                    "QueryExecution" in query_response
+                    and "Status" in query_response["QueryExecution"]
+                    and "State" in query_response["QueryExecution"]["Status"]
+                ):
+                    state = query_response["QueryExecution"]["Status"]["State"]
+                    error = ""
+                    if state == "FAILED":
+                        error = query_response["QueryExecution"]["Status"]["StateChangeReason"]
                         return state, error
-                    elif state != 'QUEUED':
+                    elif state != "QUEUED":
                         return state, error
                 time.sleep(5)
 
         def get_athena_results(query_execution_id):
             query_results = athena_client.get_query_results(
-                QueryExecutionId=query_execution_id['QueryExecutionId'],
-                MaxResults=100
+                QueryExecutionId=query_execution_id["QueryExecutionId"], MaxResults=100
             )
             logger.info(query_results)
             return query_results
 
-        num_of_steps = job_details['num_of_steps']
-        current_step = job_details['current_step']
-        team = body['team']
-        date_substitutions = body.get('date_substitutions', [])
-        pipeline = body['pipeline']
-        table_name = body['dest_table']['name']
-        dest_part_value =body['dest_table'].get('part_value', None)
-        db = body['dest_db']
-        steps = job_details['steps']
-        status = job_details.get('jobStatus', "STARTING_NEXT_QUERY")
+        num_of_steps = job_details["num_of_steps"]
+        current_step = job_details["current_step"]
+        team = body["team"]
+        date_substitutions = body.get("date_substitutions", [])
+        pipeline = body["pipeline"]
+        table_name = body["dest_table"]["name"]
+        dest_part_value = body["dest_table"].get("part_value", None)
+        db = body["dest_db"]
+        steps = job_details["steps"]
+        status = job_details.get("jobStatus", "STARTING_NEXT_QUERY")
         step = steps[current_step]
-        sql = step.get('sql','')
-        sql_file = step.get('sql_file','')
-        database = step['db']
-        info = step['info']
+        sql = step.get("sql", "")
+        sql_file = step.get("sql_file", "")
+        database = step["db"]
+        info = step["info"]
         current_step += 1
-        query = ''
+        query = ""
 
         if status == "STARTING_NEXT_QUERY":
-            ssmcli = boto3.client('ssm')
-            ssmresponse = ssmcli.get_parameter(
-                Name='/SDLF/Misc/pEnv'
-            )
-            db_env = ssmresponse['Parameter']['Value']
-            ssmresponse = ssmcli.get_parameter(
-                Name=f'/SDLF/ATHENA/{team}/{pipeline}/WorkgroupName'
-            )
-            workgroup = ssmresponse['Parameter']['Value']
-            if sql != '':
+            ssmcli = boto3.client("ssm")
+            ssmresponse = ssmcli.get_parameter(Name="/SDLF/Misc/pEnv")
+            db_env = ssmresponse["Parameter"]["Value"]
+            ssmresponse = ssmcli.get_parameter(Name=f"/SDLF/ATHENA/{team}/{pipeline}/WorkgroupName")
+            workgroup = ssmresponse["Parameter"]["Value"]
+            if sql != "":
                 query = sql
-            elif sql_file != '':
-                sql_file = f'artifacts/athena_queries/{team}/{sql_file}'
+            elif sql_file != "":
+                sql_file = f"artifacts/athena_queries/{team}/{sql_file}"
                 query = s3_interface.read_object(artifacts_bucket, sql_file).getvalue()
-                query = query.replace('$ENV', db_env)
-                query = query.replace('$dt', dest_part_value)
+                query = query.replace("$ENV", db_env)
+                query = query.replace("$dt", dest_part_value)
             else:
-                logger.error('No sql or file provided')
+                logger.error("No sql or file provided")
             if dest_part_value and date_substitutions:
                 for substitution in date_substitutions:
-                    query = query.replace(substitution['token'],(datetime.strptime(dest_part_value,'%Y%m%d')
-                                          - relativedelta(**substitution['relativedelta_attributes'])).strftime(substitution['format']))
-            logger.info(f'Athena Light Transform step {current_step}/{num_of_steps} [{info}] STARTED')
-            logger.info(f'Executing query: {query}')
+                    query = query.replace(
+                        substitution["token"],
+                        (
+                            datetime.strptime(dest_part_value, "%Y%m%d")
+                            - relativedelta(**substitution["relativedelta_attributes"])
+                        ).strftime(substitution["format"]),
+                    )
+            logger.info(f"Athena Light Transform step {current_step}/{num_of_steps} [{info}] STARTED")
+            logger.info(f"Executing query: {query}")
             query_id = run_athena_query(query, database, workgroup)
-            job_details['query_id'] = query_id
+            job_details["query_id"] = query_id
             status, error_log = athena_status(query_id)
-        elif status in ['RUNNING', 'QUEUED']:
-            query_id = job_details['query_id']
+        elif status in ["RUNNING", "QUEUED"]:
+            query_id = job_details["query_id"]
             status, error_log = athena_status(query_id)
 
-        if status == 'FAILED':
-            logger.error(f'Athena heavy Transform step {current_step}/{num_of_steps} [{info}] FAILED')
-            logger.error(f'Athena error: {error_log}')
-        elif status == 'SUCCEEDED':
+        if status == "FAILED":
+            logger.error(f"Athena heavy Transform step {current_step}/{num_of_steps} [{info}] FAILED")
+            logger.error(f"Athena error: {error_log}")
+        elif status == "SUCCEEDED":
             # processed_keys = s3_interface.list_objects(stage_bucket, target_table_full_path)
             query_result = get_athena_results(query_id)
-            logger.info(f'Athena heavy Transform step {current_step}/{num_of_steps} [{info}] SUCCEEDED')
-            logger.info(f'Query result :{query_result}')
-            job_details['current_step'] = current_step
+            logger.info(f"Athena heavy Transform step {current_step}/{num_of_steps} [{info}] SUCCEEDED")
+            logger.info(f"Query result :{query_result}")
+            job_details["current_step"] = current_step
             if current_step == num_of_steps:
-                status = 'SUCCEEDED'
+                status = "SUCCEEDED"
             else:
-                status = 'STARTING_NEXT_QUERY'
+                status = "STARTING_NEXT_QUERY"
 
-        job_details['jobStatus'] = status
-        response = {
-            'processedKeysPath': processed_keys_path,
-            'jobDetails': job_details
-        }
+        job_details["jobStatus"] = status
+        response = {"processedKeysPath": processed_keys_path, "jobDetails": job_details}
 
         #######################################################
         # IMPORTANT

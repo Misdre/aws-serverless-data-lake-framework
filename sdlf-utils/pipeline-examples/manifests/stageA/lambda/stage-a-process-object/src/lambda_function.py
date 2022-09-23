@@ -12,9 +12,10 @@ logger = init_logger(__name__)
 dynamo_config = DynamoConfiguration()
 dynamo_interface = DynamoInterface(dynamo_config)
 
+
 def remove_content_tmp():
     # Remove contents of the Lambda /tmp folder (Not released by default)
-    for root, dirs, files in os.walk('/tmp'):
+    for root, dirs, files in os.walk("/tmp"):
         for f in files:
             os.unlink(os.path.join(root, f))
         for d in dirs:
@@ -32,41 +33,36 @@ def lambda_handler(event, context):
         {dict} -- Dictionary with Processed Bucket and Key(s)
     """
     try:
-        logger.info('Fetching event data from previous step')
-        bucket = event['body']['bucket']
-        key = event['body']['key']
-        team = event['body']['team']
-        stage = event['body']['pipeline_stage']
-        dataset = event['body']['dataset']
-        ddb_key = event['body']['manifest_ddb_key']
+        logger.info("Fetching event data from previous step")
+        bucket = event["body"]["bucket"]
+        key = event["body"]["key"]
+        team = event["body"]["team"]
+        stage = event["body"]["pipeline_stage"]
+        dataset = event["body"]["dataset"]
+        ddb_key = event["body"]["manifest_ddb_key"]
 
-        logger.info('Initializing Octagon client')
-        component = context.function_name.split('-')[-2].title()
+        logger.info("Initializing Octagon client")
+        component = context.function_name.split("-")[-2].title()
         octagon_client = (
-            octagon.OctagonClient()
-            .with_run_lambda(True)
-            .with_configuration_instance(event['body']['env'])
-            .build()
+            octagon.OctagonClient().with_run_lambda(True).with_configuration_instance(event["body"]["env"]).build()
         )
-        peh.PipelineExecutionHistoryAPI(
-            octagon_client).retrieve_pipeline_execution(event['body']['peh_id'])
+        peh.PipelineExecutionHistoryAPI(octagon_client).retrieve_pipeline_execution(event["body"]["peh_id"])
 
         # Call custom transform created by user and process the file
-        logger.info('Calling user custom processing code')
+        logger.info("Calling user custom processing code")
         transform_handler = TransformHandler().stage_transform(team, dataset, stage)
-        response = transform_handler().transform_object(
-            bucket, key, team, dataset)  # custom user code called
+        response = transform_handler().transform_object(bucket, key, team, dataset)  # custom user code called
         remove_content_tmp()
-        octagon_client.update_pipeline_execution(status="{} {} Processing".format(stage, component),
-                                                 component=component)
-        dynamo_interface.update_manifests_control_table_stagea(
-            ddb_key,"PROCESSING",response[0])
+        octagon_client.update_pipeline_execution(
+            status="{} {} Processing".format(stage, component), component=component
+        )
+        dynamo_interface.update_manifests_control_table_stagea(ddb_key, "PROCESSING", response[0])
     except Exception as e:
         logger.error("Fatal error", exc_info=True)
-        octagon_client.end_pipeline_execution_failed(component=component,
-                                                     issue_comment="{} {} Error: {}".format(stage, component, repr(e)))
+        octagon_client.end_pipeline_execution_failed(
+            component=component, issue_comment="{} {} Error: {}".format(stage, component, repr(e))
+        )
         remove_content_tmp()
-        dynamo_interface.update_manifests_control_table_stagea(
-            ddb_key, "FAILED")
+        dynamo_interface.update_manifests_control_table_stagea(ddb_key, "FAILED")
         raise e
     return response
