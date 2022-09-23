@@ -45,15 +45,15 @@ class CustomTransform:
         # extracting fields, then saving the file
         # locally and re-uploading to Stage bucket
         def parse(json_data):
-            l = []
+            list = []
             for d in json_data:
                 o = d.copy()
                 for k in d:
                     if type(d[k]) in [dict, list]:
                         o.pop(k)
-                l.append(o)
+                list.append(o)
 
-            return l
+            return list
 
         # Reading file locally
         with open(local_path, "r") as raw_file:

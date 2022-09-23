@@ -62,7 +62,7 @@ class SQSInterface:
 
     def send_batch_messages_to_fifo_queue(self, messages, batch_size, group_id):
         try:
-            chunks = [messages[x : x + batch_size] for x in range(0, len(messages), batch_size)]
+            chunks = [messages[x: x + batch_size] for x in range(0, len(messages), batch_size)]
             for chunk in chunks:
                 entries = []
                 for x in chunk:

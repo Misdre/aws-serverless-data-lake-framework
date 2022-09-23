@@ -1,15 +1,12 @@
 import json
 import os
 
-import boto3
 from datalake_library.commons import init_logger
 from datalake_library.configuration.resource_configs import (
-    DynamoConfiguration,
     S3Configuration,
     SQSConfiguration,
     StateMachineConfiguration,
 )
-from datalake_library.interfaces.dynamo_interface import DynamoInterface
 from datalake_library.interfaces.sqs_interface import SQSInterface
 from datalake_library.interfaces.states_interface import StatesInterface
 

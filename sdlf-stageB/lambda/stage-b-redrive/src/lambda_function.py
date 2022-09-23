@@ -13,7 +13,6 @@ def lambda_handler(event, context):
     try:
         team = os.environ["TEAM"]
         pipeline = os.environ["PIPELINE"]
-        dataset = event["dataset"]
         stage = os.environ["STAGE"]
         state_config = StateMachineConfiguration(team, pipeline, stage)
         sqs_config = SQSConfiguration(team, pipeline, stage)
