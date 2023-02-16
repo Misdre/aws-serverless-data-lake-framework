@@ -1,0 +1,2 @@
+                  - !Sub "{{resolve:ssm:/SDLF/SQS/${pTeamName}/${pPipeline}${pStageName}Queue}}"
+                  - !Sub "{{resolve:ssm:/SDLF/SQS/${pTeamName}/${pPipeline}${pStageName}DLQ}}"
