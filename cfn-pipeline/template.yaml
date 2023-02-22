@@ -42,6 +42,9 @@ Parameters:
   pEventPattern:
     Description: Event pattern to match from previous stage
     Type: String
+  pLambdaRoutingStep:
+    Description: Routing Lambda function ARN
+    Type: String
 
 Conditions:
   EventBased: !Equals [!Ref pTriggerType, "event"]
@@ -164,7 +167,7 @@ Resources:
       Enabled: True
       EventSourceArn:
         Fn::GetAtt: [rQueueRoutingStep, Arn]
-      FunctionName: !Sub sdlf-${pTeamName}-${pPipelineName}-routing-${pStageName}
+      FunctionName: !Ref pLambdaRoutingStep
 
   rPostStateRule:
     Type: AWS::Events::Rule
@@ -197,7 +200,7 @@ Resources:
                   Ref: pPipelineName
                 pStageName:
                   Ref: pStageName
-          Arn: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:sdlf-${pTeamName}-${pPipelineName}-routing-${pStageName}
+          Arn: !Ref pLambdaRoutingStep
           Input:
             Fn::Sub:
               - |
@@ -229,7 +232,7 @@ Resources:
     Type: AWS::Lambda::Permission
     Condition: ScheduleBased
     Properties:
-      FunctionName: !Sub sdlf-${pTeamName}-${pPipelineName}-routing-${pStageName}
+      FunctionName: !Ref pLambdaRoutingStep
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn:
