@@ -101,12 +101,9 @@ Resources:
     Properties:
       TemplateURL: ./nested-stacks/template-glue.yaml
       Parameters:
-        pApplicationName: !Ref pApplicationName
         pDataLakeAdminRoleArn: !Ref pDataLakeAdminRoleArn
         pEnvironment: !Ref pEnvironment
         pKMSKeyId: !GetAtt [rKMSStack, Outputs.oKMSKeyId]
-        pOrganizationName: !Ref pOrganizationName
-        pPipelineBucket: !GetAtt [rS3Stack, Outputs.oPipelineBucket]
         pCloudWatchLogsRetentionInDays: !Ref pCloudWatchLogsRetentionInDays
       Tags:
         - Key: tagging-policy
