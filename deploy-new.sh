@@ -162,23 +162,8 @@ then
     else
         deploy_sdlf_foundations
     fi
-    STACK_NAME=sdlf-cicd-cfn-modules
-    aws cloudformation deploy \
-        --stack-name "$STACK_NAME" \
-        --template-file "$DIRNAME"/cfn-cicd/template-cicd-cfn-modules.yaml \
-        --parameter-overrides \
-            pSharedDevOpsAccountId="$DEVOPS_ACCOUNT" \
-        --tags Framework=sdlf \
-        --capabilities "CAPABILITY_NAMED_IAM" "CAPABILITY_AUTO_EXPAND" \
-        --region "$REGION" \
-        --profile "$DEVOPS_PROFILE"
-    echo "Waiting for stack to be created ..."
-    aws cloudformation wait stack-create-complete --profile "$DEVOPS_PROFILE" --region "$REGION" --stack-name "$STACK_NAME"
-
-    template_protection "$ENV" "$STACK_NAME" "$REGION" "$DEVOPS_PROFILE"
-
     STACK_NAME=sdlf-cicd-team-repos
-    aws cloudformation update-stack \
+    aws cloudformation create-stack \
         --stack-name "$STACK_NAME" \
         --template-body file://"$DIRNAME"/cfn-cicd/template-cicd-team-repos.yaml \
         --tags Key=Framework,Value=sdlf \
@@ -203,8 +188,7 @@ then
         --tags Framework=sdlf \
         --capabilities "CAPABILITY_NAMED_IAM" "CAPABILITY_AUTO_EXPAND" \
         --region "$REGION" \
-        --profile "$DEVOPS_PROFILE" \
-        --no-fail-on-empty-changeset
+        --profile "$DEVOPS_PROFILE"
     echo "Waiting for stack to be created ..."
     aws cloudformation wait stack-create-complete --profile "$DEVOPS_PROFILE" --region "$REGION" --stack-name "$STACK_NAME"
 
@@ -275,4 +259,23 @@ then
         --profile "$CHILD_PROFILE"
 
     template_protection "$ENV" "$STACK_NAME" "$REGION" "$CHILD_PROFILE"
+
+    ARTIFACTS_BUCKET=$(aws ssm get-parameter --name /SDLF/S3/CFNBucket --query "Parameter.Value" --output text)
+    aws s3api put-object --bucket "$ARTIFACTS_BUCKET" --key sam-translate.py --body "$DIRNAME"/cfn-cicd/sam-translate.py
+    STACK_NAME=sdlf-cicd-cfn-modules
+    aws cloudformation deploy \
+        --stack-name "$STACK_NAME" \
+        --template-file "$DIRNAME"/cfn-cicd/template-cicd-cfn-modules.yaml \
+        --parameter-overrides \
+            pEnvironment="$ENV" \
+            pSharedDevOpsAccountId="$DEVOPS_ACCOUNT" \
+            pSharedDevOpsAccountKmsKeyArn="$DEVOPS_ACCOUNT_KMS" \
+        --tags Framework=sdlf \
+        --capabilities "CAPABILITY_NAMED_IAM" "CAPABILITY_AUTO_EXPAND" \
+        --region "$REGION" \
+        --profile "$DEVOPS_PROFILE"
+    echo "Waiting for stack to be created ..."
+    aws cloudformation wait stack-create-complete --profile "$DEVOPS_PROFILE" --region "$REGION" --stack-name "$STACK_NAME"
+
+    template_protection "$ENV" "$STACK_NAME" "$REGION" "$DEVOPS_PROFILE"
 fi

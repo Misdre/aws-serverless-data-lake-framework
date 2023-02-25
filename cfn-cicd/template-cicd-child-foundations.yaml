@@ -25,11 +25,7 @@ Parameters:
     Default: sdlf-foundations
   pTeamFoundationsRepository:
     Type: String
-    Default: sdlf-team
-  pArtifactsBucket:
-    Description: The artifactory bucket used by CodeBuild and CodePipeline
-    Type: AWS::SSM::Parameter::Value<String>
-    Default: /SDLF/S3/ArtifactsBucket
+    Default: cfn-team
 
 Mappings:
   pCodeCommitBranch:
@@ -50,6 +46,54 @@ Conditions:
     !Not [!Equals [!Ref pSharedDevOpsAccountId, !Ref "AWS::AccountId"]]
 
 Resources:
+  ######## S3 #########
+  rArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub sdlf-cfn-artifacts-${AWS::Region}-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: True
+        BlockPublicPolicy: True
+        IgnorePublicAcls: True
+        RestrictPublicBuckets: True
+
+  rArtifactsBucketPolicy:
+    Condition: CrossAccount
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref rArtifactsBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:root
+            Action:
+              - s3:GetBucketLocation
+              - s3:ListBucket
+            Resource:
+              - !Sub arn:aws:s3:::${rArtifactsBucket}
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:root
+            Action:
+              - s3:Get*
+              - s3:PutObject
+            Resource:
+              - !Sub arn:aws:s3:::${rArtifactsBucket}/*
+          - Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !Sub arn:aws:s3:::${rArtifactsBucket}/*
+              - !Sub arn:aws:s3:::${rArtifactsBucket}
+            Condition:
+              Bool:
+                aws:SecureTransport: False
+
   ######## IAM #########
   rCodeBuildRole:
     Type: AWS::IAM::Role
@@ -464,8 +508,8 @@ Resources:
             Version: 2012-10-17
             Statement:
               - Resource:
-                  - !Sub arn:aws:s3:::${pArtifactsBucket}
-                  - !Sub arn:aws:s3:::${pArtifactsBucket}/*
+                  - !Sub arn:aws:s3:::${rArtifactsBucket}
+                  - !Sub arn:aws:s3:::${rArtifactsBucket}/*
                 Effect: Allow
                 Action:
                   - s3:Get*
@@ -705,7 +749,7 @@ Resources:
               RunOrder: 1
       ArtifactStore:
         Type: S3
-        Location: !Ref pArtifactsBucket
+        Location: !Ref rArtifactsBucket
         EncryptionKey:
           Id: !Ref pSharedDevOpsAccountKmsKeyArn
           Type: KMS
@@ -751,7 +795,7 @@ Resources:
               RunOrder: 1
       ArtifactStore:
         Type: S3
-        Location: !Ref pArtifactsBucket
+        Location: !Ref rArtifactsBucket
         EncryptionKey:
           Id: !Ref pSharedDevOpsAccountKmsKeyArn
           Type: KMS
@@ -823,6 +867,13 @@ Resources:
         - DataLakePrincipalIdentifier: !GetAtt rDataLakeAdminRole.Arn
 
   ######## SSM #########
+  rCFNBucketSsm:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /SDLF/S3/CFNBucket
+      Type: String
+      Value: !Ref rArtifactsBucket
+      Description: S3 CFN Artifacts Bucket
   rEnvironmentSsm:
     Type: AWS::SSM::Parameter
     Properties:

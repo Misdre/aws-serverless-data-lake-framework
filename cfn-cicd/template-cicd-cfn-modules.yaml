@@ -2,103 +2,44 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: CICD pipelines to automate SDLF workflows
 
 Parameters:
-  pBranchName:
+  pEnvironment:
+    Description: Environment name
     Type: String
-    Default: master
+    Default: dev
+    AllowedValues: [dev, test, prod]
   pSharedDevOpsAccountId:
     Description: Shared DevOps AWS account ID
     Type: String
     AllowedPattern: (\d{12}|^$)
     ConstraintDescription: Must be an AWS account ID
+  pPipelineRepository:
+    Type: String
+    Default: cfn-pipeline
+  pDatasetRepository:
+    Type: String
+    Default: cfn-dataset
+  pSharedDevOpsAccountKmsKeyArn:
+    Description: Arn of the KMS key in the Shared DevOps account
+    Type: String
+  pArtifactsBucket:
+    Description: The artifactory bucket used by CodeBuild and CodePipeline
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /SDLF/S3/CFNBucket
+
+Mappings:
+  pCodeCommitBranch:
+    dev:
+      branch: dev
+    test:
+      branch: test
+    prod:
+      branch: master
 
 Conditions:
   CrossAccount:
     !Not [!Equals [!Ref pSharedDevOpsAccountId, !Ref "AWS::AccountId"]]
 
 Resources:
-  rKMSKey:
-    Type: AWS::KMS::Key
-    Properties:
-      Description: KMS Key for Encryption of CodePipeline Artifacts
-      Enabled: true
-      EnableKeyRotation: true
-      KeyPolicy:
-        Version: 2012-10-17
-        Statement:
-          - Sid: Allow administration of the key
-            Effect: Allow
-            Principal:
-              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
-            Action: kms:*
-            Resource: "*"
-          - Sid: Allow logs access
-            Effect: Allow
-            Principal:
-              Service: !Sub logs.${AWS::Region}.amazonaws.com
-            Action:
-              - kms:Decrypt
-              - kms:DescribeKey
-              - kms:Encrypt
-              - kms:GenerateDataKey*
-              - kms:ReEncrypt*
-            Resource: "*"
-    UpdateReplacePolicy: Retain
-    DeletionPolicy: Retain
-
-  rKMSKeyAlias:
-    Type: AWS::KMS::Alias
-    Properties:
-      AliasName: alias/sdlf-cicd-kms-key
-      TargetKeyId: !Ref rKMSKey
-
-  ######## S3 #########
-  rArtifactsBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub sdlf-cfn-artifacts-${AWS::Region}-${AWS::AccountId}
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: True
-        BlockPublicPolicy: True
-        IgnorePublicAcls: True
-        RestrictPublicBuckets: True
-
-  rArtifactsBucketPolicy:
-    Condition: CrossAccount
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref rArtifactsBucket
-      PolicyDocument:
-        Statement:
-          - Effect: Allow
-            Principal:
-              AWS: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:root
-            Action:
-              - s3:GetBucketLocation
-              - s3:ListBucket
-            Resource:
-              - !Sub arn:aws:s3:::${rArtifactsBucket}
-          - Effect: Allow
-            Principal:
-              AWS: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:root
-            Action:
-              - s3:Get*
-              - s3:PutObject
-            Resource:
-              - !Sub arn:aws:s3:::${rArtifactsBucket}/*
-          - Effect: Deny
-            Principal: "*"
-            Action: s3:*
-            Resource:
-              - !Sub arn:aws:s3:::${rArtifactsBucket}/*
-              - !Sub arn:aws:s3:::${rArtifactsBucket}
-            Condition:
-              Bool:
-                aws:SecureTransport: False
-
   ######## IAM #########
   rBuildCloudformationModuleRole:
     Type: AWS::IAM::Role
@@ -136,7 +77,7 @@ Resources:
                   - s3:GetObjectVersion
                   - s3:PutObject
                 Resource:
-                  - !Sub arn:aws:s3:::${rArtifactsBucket}/*
+                  - !Sub arn:aws:s3:::${pArtifactsBucket}/*
               - Effect: Allow
                 Action:
                   - lambda:List*
@@ -154,7 +95,7 @@ Resources:
                   - kms:GenerateDataKey*
                   - kms:ReEncrypt*
                 Resource:
-                  - !Ref rKMSKey
+                  - !Ref pSharedDevOpsAccountKmsKeyArn
               - Effect: Allow
                 Action:
                   - iam:ListPolicies
@@ -180,8 +121,8 @@ Resources:
                   - cloudformation:RegisterType
                   - cloudformation:SetTypeDefaultVersion
                 Resource:
-                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:type/MODULE/sdlf::*"
-                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:type/module/sdlf-*"
+                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:type/MODULE/awslabs::sdlf::*"
+                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:type/module/awslabs-sdlf-*"
               - Effect: Allow
                 Action:
                   - s3:CreateBucket # necessary for CfnUploadInfra stack
@@ -221,12 +162,12 @@ Resources:
         Type: CODEPIPELINE
       Name: sdlf-cicd-build-cfn-module-codebuild
       Description: Build a CloudFormation module from Serverless templates
-      EncryptionKey: !Ref rKMSKey
+      EncryptionKey: !Ref pSharedDevOpsAccountKmsKeyArn
       Environment:
         EnvironmentVariables:
           - Name: ARTIFACTS_BUCKET
             Type: PLAINTEXT
-            Value: !Ref rArtifactsBucket
+            Value: !Ref pArtifactsBucket
         ComputeType: BUILD_GENERAL1_SMALL
         Image: aws/codebuild/standard:5.0
         Type: LINUX_CONTAINER
@@ -256,7 +197,7 @@ Resources:
                 - |-
                     mkdir module
                     cd module
-                    cfn init --artifact-type MODULE --type-name "sdlf::$TEAM_NAME::$MODULE_NAME::MODULE" && rm fragments/sample.json
+                    cfn init --artifact-type MODULE --type-name "awslabs::sdlf::$MODULE_NAME::MODULE" && rm fragments/sample.json
                     cp -i -a ../translated-template.json fragments/
                     cfn submit > cfn.log 2>&1
                     if grep "Failed.*CloudFormationManagedUploadInfrastructure.*stack" cfn.log; then
@@ -564,8 +505,8 @@ Resources:
                   - s3:PutObject
                   - s3:SetBucketEncryption
                 Resource:
-                  - !Sub arn:aws:s3:::${rArtifactsBucket}
-                  - !Sub arn:aws:s3:::${rArtifactsBucket}/*
+                  - !Sub arn:aws:s3:::${pArtifactsBucket}
+                  - !Sub arn:aws:s3:::${pArtifactsBucket}/*
               - Effect: Allow
                 Action:
                   - ssm:AddTagsToResource
@@ -592,10 +533,10 @@ Resources:
                   - kms:GenerateDataKey*
                   - kms:ReEncrypt*
                 Resource:
-                  - !Ref rKMSKey
+                  - !Ref pSharedDevOpsAccountKmsKeyArn
               - Effect: Allow
                 Action: sts:AssumeRole
-                Resource: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-foundations-codecommit
+                Resource: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-module-codecommit-${pEnvironment}
 
   rPipelineStateMachinePipeline: # and that's why it cannot be here. own cicd module? cicd-pipeline? as we add pipeline to every stage
     Type: AWS::CodePipeline::Pipeline
@@ -607,7 +548,7 @@ Resources:
           Actions:
             -
               Name: Source
-              RoleArn: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-foundations-codecommit
+              RoleArn: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-module-codecommit-${pEnvironment}
               ActionTypeId:
                 Category: Source
                 Owner: AWS
@@ -616,8 +557,8 @@ Resources:
               OutputArtifacts:
                 - Name: SourceArtifact
               Configuration:
-                RepositoryName: cfn-pipeline
-                BranchName: !Ref pBranchName
+                RepositoryName: !Ref pPipelineRepository
+                BranchName: !FindInMap [pCodeCommitBranch, !Ref pEnvironment, branch]
                 PollForSourceChanges: false
               RunOrder: 1
         -
@@ -641,9 +582,9 @@ Resources:
       ArtifactStore:
         Type: S3
         EncryptionKey:
-          Id: !Ref rKMSKey
+          Id: !Ref pSharedDevOpsAccountKmsKeyArn
           Type: KMS
-        Location: !Ref rArtifactsBucket
+        Location: !Ref pArtifactsBucket
 
 
 
@@ -657,7 +598,7 @@ Resources:
           Actions:
             -
               Name: Source
-              RoleArn: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-foundations-codecommit
+              RoleArn: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-module-codecommit-${pEnvironment}
               ActionTypeId:
                 Category: Source
                 Owner: AWS
@@ -666,8 +607,8 @@ Resources:
               OutputArtifacts:
                 - Name: SourceArtifact
               Configuration:
-                RepositoryName: cfn-dataset
-                BranchName: !Ref pBranchName
+                RepositoryName: !Ref pDatasetRepository
+                BranchName: !FindInMap [pCodeCommitBranch, !Ref pEnvironment, branch]
                 PollForSourceChanges: false
               RunOrder: 1
         -
@@ -691,19 +632,11 @@ Resources:
       ArtifactStore:
         Type: S3
         EncryptionKey:
-          Id: !Ref rKMSKey
+          Id: !Ref pSharedDevOpsAccountKmsKeyArn
           Type: KMS
-        Location: !Ref rArtifactsBucket
+        Location: !Ref pArtifactsBucket
 
   ######## SSM OUTPUTS #########
-  rCFNBucketSsm:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: /SDLF/S3/CFNBucket
-      Type: String
-      Value: !Ref rArtifactsBucket
-      Description: S3 CFN Artifacts Bucket
-
   rBuildCloudformationModuleStageSsm:
     Type: AWS::SSM::Parameter
     Properties:
