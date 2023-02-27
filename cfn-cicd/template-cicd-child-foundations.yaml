@@ -23,9 +23,6 @@ Parameters:
   pFoundationsRepository:
     Type: String
     Default: sdlf-foundations
-  pTeamFoundationsRepository:
-    Type: String
-    Default: cfn-team
 
 Mappings:
   pCodeCommitBranch:
@@ -557,7 +554,6 @@ Resources:
                 Action: codepipeline:StartPipelineExecution
                 Resource:
                   - !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rFoundationsCodePipeline}
-                  - !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rTeamCodePipeline}
 
   # Role defined upstream due to Lake Formation PutDataLakeSettings constraints
   rDataLakeAdminRole:
@@ -755,52 +751,6 @@ Resources:
           Type: KMS
       Name: sdlf-cicd-foundations
 
-  rTeamCodePipeline:
-    DependsOn: rFoundationsCodePipeline
-    Type: AWS::CodePipeline::Pipeline
-    Properties:
-      RoleArn: !GetAtt rCodePipelineRole.Arn
-      Stages:
-        - Name: Source
-          Actions:
-            - Name: cicd-team
-              RoleArn: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-foundations-codecommit-${pEnvironment}
-              ActionTypeId:
-                Category: Source
-                Owner: AWS
-                Version: "1"
-                Provider: CodeCommit
-              OutputArtifacts:
-                - Name: Source1
-              Configuration:
-                RepositoryName: !Ref pTeamFoundationsRepository
-                BranchName:
-                  !FindInMap [pCodeCommitBranch, !Ref pEnvironment, branch]
-                PollForSourceChanges: false
-              RunOrder: 1
-        - Name: Team
-          Actions:
-            - Name: Build
-              InputArtifacts:
-                - Name: Source1
-              ActionTypeId:
-                Category: Build
-                Owner: AWS
-                Version: "1"
-                Provider: CodeBuild
-              OutputArtifacts:
-                - Name: Source2
-              Configuration:
-                ProjectName: !Ref rTeamCodeBuildProject
-              RunOrder: 1
-      ArtifactStore:
-        Type: S3
-        Location: !Ref rArtifactsBucket
-        EncryptionKey:
-          Id: !Ref pSharedDevOpsAccountKmsKeyArn
-          Type: KMS
-      Name: sdlf-cicd-team
-
   ######## EVENTS #########
   rEventBusPolicy:
     Condition: CrossAccount
@@ -833,30 +783,6 @@ Resources:
         - Arn: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rFoundationsCodePipeline}
           RoleArn: !GetAtt rCloudWatchRepositoryTriggerRole.Arn
           Id: sdlf-cicd-foundations
-
-  rTeamCodePipelineTriggerRule:
-    Type: AWS::Events::Rule
-    Properties:
-      State: !FindInMap [pDemoMode, !Ref pDemo, state]
-      EventPattern:
-        source:
-          - aws.codecommit
-        detail-type:
-          - CodeCommit Repository State Change
-        resources:
-          - !Sub arn:aws:codecommit:${AWS::Region}:${pSharedDevOpsAccountId}:${pTeamFoundationsRepository}
-        detail:
-          event:
-            - referenceCreated
-            - referenceUpdated
-          referenceType:
-            - branch
-          referenceName:
-            - !FindInMap [pCodeCommitBranch, !Ref pEnvironment, branch]
-      Targets:
-        - Arn: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rTeamCodePipeline}
-          RoleArn: !GetAtt rCloudWatchRepositoryTriggerRole.Arn
-          Id: sdlf-cicd-team
 
   ######## LAKE FORMATION #########
   rDataLakeSettings:

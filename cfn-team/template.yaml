@@ -4,20 +4,20 @@ Description: Resources to be created to manage a team
 Parameters:
   pApplicationName:
     Description: Name of the application
-    Type: AWS::SSM::Parameter::Value<String>
-    Default: /SDLF/Misc/pApp
+    Type: String
+    Default: "{{resolve:ssm:/SDLF/Misc/pApp}}"
   pAnalyticsBucket:
     Description: The analytics bucket for the solution
-    Type: AWS::SSM::Parameter::Value<String>
-    Default: /SDLF/S3/AnalyticsBucket
+    Type: String
+    Default: "{{resolve:ssm:/SDLF/S3/AnalyticsBucket}}"
   pCentralBucket:
     Description: The central bucket for the solution
-    Type: AWS::SSM::Parameter::Value<String>
-    Default: /SDLF/S3/CentralBucket
+    Type: String
+    Default: "{{resolve:ssm:/SDLF/S3/CentralBucket}}"
   pCFNBucket:
     Description: The CloudFormation bucket for the solution
-    Type: AWS::SSM::Parameter::Value<String>
-    Default: /SDLF/S3/CFNBucket
+    Type: String
+    Default: "{{resolve:ssm:/SDLF/S3/CFNBucket}}"
   pDatalakeLibraryRepositoryName:
     Description: Name of the repository containing the code for the Datalake Library.
     Type: String
@@ -32,8 +32,8 @@ Parameters:
     Default: default-pip-libraries
   pEnvironment:
     Description: Environment name
-    Type: AWS::SSM::Parameter::Value<String>
-    Default: /SDLF/Misc/pEnv
+    Type: String
+    Default: "{{resolve:ssm:/SDLF/Misc/pEnv}}"
   pLibrariesBranchName:
     Description: Name of the default branch for Python libraries
     Type: String
@@ -44,16 +44,16 @@ Parameters:
     Default: 80
   pOrganizationName:
     Description: Name of the organization owning the datalake
-    Type: AWS::SSM::Parameter::Value<String>
-    Default: /SDLF/Misc/pOrg
+    Type: String
+    Default: "{{resolve:ssm:/SDLF/Misc/pOrg}}"
   pPipLibrariesRepositoryName:
     Description: The repository containing requirements.txt
     Type: String
     Default: sdlf-pipLibrary
   pPipelineBucket:
     Description: The artifactory bucket used by CodeBuild and CodePipeline
-    Type: AWS::SSM::Parameter::Value<String>
-    Default: /SDLF/S3/ArtifactsBucket
+    Type: String
+    Default: "{{resolve:ssm:/SDLF/S3/ArtifactsBucket}}"
   pRunCodeCoverage:
     Description: "Creates code coverage reports from the unit tests included in `pDatalakeLibraryRepositoryName`. Enforces the minimum threshold specified in `pMinTestCoverage`"
     Type: String
@@ -65,12 +65,12 @@ Parameters:
     Default: nobody@amazon.com
   pSharedDevOpsAccountId:
     Description: Shared DevOps Account Id
-    Type: AWS::SSM::Parameter::Value<String>
-    Default: /SDLF/Misc/DevOpsAccountId
+    Type: String
+    Default: "{{resolve:ssm:/SDLF/Misc/DevOpsAccountId}}"
   pStageBucket:
     Description: The stage bucket for the solution
-    Type: AWS::SSM::Parameter::Value<String>
-    Default: /SDLF/S3/StageBucket
+    Type: String
+    Default: "{{resolve:ssm:/SDLF/S3/StageBucket}}"
   pTeamName:
     Description: Name of the team (all lowercase, no symbols or spaces)
     Type: String
@@ -112,7 +112,7 @@ Resources:
       Description: !Sub ${pTeamName} Infrastructure KMS Key
       EnableKeyRotation: True
       KeyPolicy:
-        Version: 2012-10-17
+        Version: "2012-10-17"
         Id: !Sub sdlf-${pTeamName}-infra-key-policy
         Statement:
           - Sid: Allow administration of the key
@@ -200,7 +200,7 @@ Resources:
       Description: !Sub ${pTeamName} Data KMS Key
       EnableKeyRotation: True
       KeyPolicy:
-        Version: 2012-10-17
+        Version: "2012-10-17"
         Id: !Sub sdlf-${pTeamName}-data-key-policy
         Statement:
           - Sid: Allow administration of the key
@@ -1715,3 +1715,68 @@ Resources:
       Type: String
       Value: !Ref rBuildDeployDatalakeLibraryLayer
       Description: Name of the CodeBuild job that packages the Datalake Libs into a Lambda Layer
+
+  ######## LAKEFORMATION PERMISSIONS #########
+  rCentralTeamLakeFormationPermissions:
+    Type: AWS::LakeFormation::Permissions
+    Properties:
+      DataLakePrincipal:
+        DataLakePrincipalIdentifier: !GetAtt rDatalakeCrawlerRole.Arn
+      Permissions:
+        - DATA_LOCATION_ACCESS
+      Resource:
+        DataLocationResource:
+          S3Resource:
+            !If [
+              CreateMultipleBuckets,
+              !Sub "arn:aws:s3:::${pCentralBucket}/${pTeamName}/",
+              !Sub "arn:aws:s3:::${pCentralBucket}/raw/${pTeamName}/",
+            ]
+
+  rStagePreTeamLakeFormationPermissions:
+    Type: AWS::LakeFormation::Permissions
+    Properties:
+      DataLakePrincipal:
+        DataLakePrincipalIdentifier: !GetAtt rDatalakeCrawlerRole.Arn
+      Permissions:
+        - DATA_LOCATION_ACCESS
+      Resource:
+        DataLocationResource:
+          S3Resource:
+            !If [
+              CreateMultipleBuckets,
+              !Sub "arn:aws:s3:::${pStageBucket}/pre-stage/${pTeamName}/",
+              !Sub "arn:aws:s3:::${pCentralBucket}/pre-stage/${pTeamName}/",
+            ]
+
+  rStagePostTeamLakeFormationPermissions:
+    Type: AWS::LakeFormation::Permissions
+    Properties:
+      DataLakePrincipal:
+        DataLakePrincipalIdentifier: !GetAtt rDatalakeCrawlerRole.Arn
+      Permissions:
+        - DATA_LOCATION_ACCESS
+      Resource:
+        DataLocationResource:
+          S3Resource:
+            !If [
+              CreateMultipleBuckets,
+              !Sub "arn:aws:s3:::${pStageBucket}/post-stage/${pTeamName}/",
+              !Sub "arn:aws:s3:::${pCentralBucket}/post-stage/${pTeamName}/",
+            ]
+
+  rAnalyticsTeamLakeFormationPermissions:
+    Type: AWS::LakeFormation::Permissions
+    Properties:
+      DataLakePrincipal:
+        DataLakePrincipalIdentifier: !GetAtt rDatalakeCrawlerRole.Arn
+      Permissions:
+        - DATA_LOCATION_ACCESS
+      Resource:
+        DataLocationResource:
+          S3Resource:
+            !If [
+              CreateMultipleBuckets,
+              !Sub "arn:aws:s3:::${pAnalyticsBucket}/${pTeamName}/",
+              !Sub "arn:aws:s3:::${pCentralBucket}/analytics/${pTeamName}/",
+            ]

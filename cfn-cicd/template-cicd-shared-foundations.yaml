@@ -146,7 +146,6 @@ Resources:
                   - codecommit:UploadArchive
                 Resource:
                   - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pFoundationsRepository}
-                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pTeamRepository}
               - Effect: Allow
                 Action:
                   - s3:Get*
@@ -180,7 +179,6 @@ Resources:
           - CodeCommit Repository State Change
         resources:
           - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pFoundationsRepository}
-          - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pTeamRepository}
         detail:
           event:
             - referenceCreated
