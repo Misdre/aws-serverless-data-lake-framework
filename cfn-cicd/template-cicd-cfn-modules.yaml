@@ -3,15 +3,14 @@ Description: CICD pipelines to automate SDLF workflows
 
 Parameters:
   pEnvironment:
-    Description: Environment name
-    Type: String
-    Default: dev
-    AllowedValues: [dev, test, prod]
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /SDLF/Misc/pEnv
   pSharedDevOpsAccountId:
-    Description: Shared DevOps AWS account ID
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /SDLF/Misc/DevOpsAccountId
+  pTeamRepository:
     Type: String
-    AllowedPattern: (\d{12}|^$)
-    ConstraintDescription: Must be an AWS account ID
+    Default: cfn-team
   pPipelineRepository:
     Type: String
     Default: cfn-pipeline
@@ -538,7 +537,55 @@ Resources:
                 Action: sts:AssumeRole
                 Resource: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-module-codecommit-${pEnvironment}
 
-  rPipelineStateMachinePipeline: # and that's why it cannot be here. own cicd module? cicd-pipeline? as we add pipeline to every stage
+  rTeamStateMachinePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt rCodePipelineRole.Arn
+      Stages:
+        -
+          Name: Source
+          Actions:
+            -
+              Name: Source
+              RoleArn: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-module-codecommit-${pEnvironment}
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: '1'
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                RepositoryName: !Ref pTeamRepository
+                BranchName: !FindInMap [pCodeCommitBranch, !Ref pEnvironment, branch]
+                PollForSourceChanges: false
+              RunOrder: 1
+        -
+          Name: Build
+          Actions:
+            -
+              Name: Build
+              InputArtifacts:
+              - Name: SourceArtifact
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              OutputArtifacts:
+                - Name: BuildArtifact
+              Configuration:
+                ProjectName: !Ref rBuildCloudformationModuleStage
+                EnvironmentVariables: '[{"name":"MODULE_NAME", "value":"team", "type":"PLAINTEXT"}]'
+              RunOrder: 1
+      ArtifactStore:
+        Type: S3
+        EncryptionKey:
+          Id: !Ref pSharedDevOpsAccountKmsKeyArn
+          Type: KMS
+        Location: !Ref pArtifactsBucket
+
+  rPipelineStateMachinePipeline: # and that's why it cannot be here. own cicd module? cicd-pipeline? as we add pipeline to every stage TODO
     Type: AWS::CodePipeline::Pipeline
     Properties:
       RoleArn: !GetAtt rCodePipelineRole.Arn
@@ -585,8 +632,6 @@ Resources:
           Id: !Ref pSharedDevOpsAccountKmsKeyArn
           Type: KMS
         Location: !Ref pArtifactsBucket
-
-
 
   rDatasetStateMachinePipeline:
     Type: AWS::CodePipeline::Pipeline
@@ -635,6 +680,30 @@ Resources:
           Id: !Ref pSharedDevOpsAccountKmsKeyArn
           Type: KMS
         Location: !Ref pArtifactsBucket
+
+  rStageAStateMachinePipeline:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - rCodePipelineRoleSsm
+      - rBuildCloudformationModuleStageSsm
+    Properties:
+      TemplateURL: ./nested-stacks/template-stage-statemachine.yaml
+      Parameters:
+        pStageRepository: cfn-stageA
+        pStageName: stageA
+        pSharedDevOpsAccountKmsKeyArn: !Ref pSharedDevOpsAccountKmsKeyArn
+
+  rStageBStateMachinePipeline:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - rCodePipelineRoleSsm
+      - rBuildCloudformationModuleStageSsm
+    Properties:
+      TemplateURL: ./nested-stacks/template-stage-statemachine.yaml
+      Parameters:
+        pStageRepository: cfn-stageB
+        pStageName: stageB
+        pSharedDevOpsAccountKmsKeyArn: !Ref pSharedDevOpsAccountKmsKeyArn
 
   ######## SSM OUTPUTS #########
   rBuildCloudformationModuleStageSsm:

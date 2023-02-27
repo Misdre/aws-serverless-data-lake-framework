@@ -15,7 +15,7 @@ Parameters:
   pFoundationsRepository:
     Type: String
     Default: sdlf-foundations
-  pTeamFoundationsRepository:
+  pTeamRepository:
     Type: String
     Default: cfn-team
   pPipelineRepository:
@@ -24,6 +24,9 @@ Parameters:
   pDatasetRepository:
     Type: String
     Default: cfn-dataset
+  pStageRepositoryPrefix:
+    Type: String
+    Default: cfn-stage-*
 
 Mappings:
   pCodeCommitBranch:
@@ -143,7 +146,7 @@ Resources:
                   - codecommit:UploadArchive
                 Resource:
                   - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pFoundationsRepository}
-                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pTeamFoundationsRepository}
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pTeamRepository}
               - Effect: Allow
                 Action:
                   - s3:Get*
@@ -177,7 +180,7 @@ Resources:
           - CodeCommit Repository State Change
         resources:
           - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pFoundationsRepository}
-          - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pTeamFoundationsRepository}
+          - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pTeamRepository}
         detail:
           event:
             - referenceCreated
@@ -236,8 +239,10 @@ Resources:
                   - codecommit:List*
                   - codecommit:UploadArchive
                 Resource:
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pTeamRepository}
                   - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pPipelineRepository}
                   - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pDatasetRepository}
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pStageRepositoryPrefix}
               - Effect: Allow
                 Action:
                   - s3:Get*

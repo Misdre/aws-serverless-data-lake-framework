@@ -262,20 +262,23 @@ then
 
     ARTIFACTS_BUCKET=$(aws ssm get-parameter --name /SDLF/S3/CFNBucket --query "Parameter.Value" --output text)
     aws s3api put-object --bucket "$ARTIFACTS_BUCKET" --key sam-translate.py --body "$DIRNAME"/cfn-cicd/sam-translate.py
+    mkdir "$DIRNAME"/output
+    sam package --profile "$CHILD_PROFILE" --template-file "$DIRNAME"/cfn-cicd/template-cicd-cfn-modules.yaml  --s3-bucket "$ARTIFACTS_BUCKET" --s3-prefix template-cicd-cfn-modules --output-template-file "$DIRNAME"/output/packaged-template.yaml
+
     STACK_NAME=sdlf-cicd-cfn-modules
     aws cloudformation deploy \
         --stack-name "$STACK_NAME" \
-        --template-file "$DIRNAME"/cfn-cicd/template-cicd-cfn-modules.yaml \
+        --template-file "$DIRNAME"/output/packaged-template.yaml \
         --parameter-overrides \
-            pEnvironment="$ENV" \
-            pSharedDevOpsAccountId="$DEVOPS_ACCOUNT" \
+            pEnvironment="/SDLF/Misc/pEnv" \
+            pSharedDevOpsAccountId="/SDLF/Misc/DevOpsAccountId" \
             pSharedDevOpsAccountKmsKeyArn="$DEVOPS_ACCOUNT_KMS" \
         --tags Framework=sdlf \
         --capabilities "CAPABILITY_NAMED_IAM" "CAPABILITY_AUTO_EXPAND" \
         --region "$REGION" \
-        --profile "$DEVOPS_PROFILE"
+        --profile "$CHILD_PROFILE"
     echo "Waiting for stack to be created ..."
-    aws cloudformation wait stack-create-complete --profile "$DEVOPS_PROFILE" --region "$REGION" --stack-name "$STACK_NAME"
+    aws cloudformation wait stack-create-complete --profile "$CHILD_PROFILE" --region "$REGION" --stack-name "$STACK_NAME"
 
-    template_protection "$ENV" "$STACK_NAME" "$REGION" "$DEVOPS_PROFILE"
+    template_protection "$ENV" "$STACK_NAME" "$REGION" "$CHILD_PROFILE"
 fi
