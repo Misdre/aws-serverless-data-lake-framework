@@ -523,7 +523,6 @@ Resources:
                   - kms:ReEncrypt*
               - Resource:
                   - !GetAtt rFoundationsCodeBuildProject.Arn
-                  - !GetAtt rTeamCodeBuildProject.Arn
                 Effect: Allow
                 Action:
                   - codebuild:StartBuild
@@ -647,58 +646,6 @@ Resources:
                 - |-
                   if  [ "${CODEBUILD_BUILD_NUMBER}" -gt "1" ]; then
                       ./deploy.sh
-                  fi
-          artifacts:
-            files:
-              - "*"
-              - "**/*"
-
-  rTeamCodeBuildProject:
-    Type: AWS::CodeBuild::Project
-    Properties:
-      Name: sdlf-cicd-team-codebuild
-      Artifacts:
-        Type: CODEPIPELINE
-      EncryptionKey: !Ref pSharedDevOpsAccountKmsKeyArn
-      Environment:
-        ComputeType: BUILD_GENERAL1_SMALL
-        Image: aws/codebuild/standard:4.0
-        Type: LINUX_CONTAINER
-        EnvironmentVariables:
-          - Name: ENV
-            Type: PLAINTEXT
-            Value: !Ref pEnvironment
-          - Name: DEVOPS_ACCOUNT_ID
-            Value: !Ref pSharedDevOpsAccountId
-          - Name: CHILD_ACCOUNT_ID
-            Value: !Ref AWS::AccountId
-          - Name: CROSS_ACCOUNT_ROLE_ARN
-            Value: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-foundations-codecommit-${pEnvironment}
-      ServiceRole: !Ref rCodeBuildRole
-      TimeoutInMinutes: 20
-      Source:
-        Type: CODEPIPELINE
-        BuildSpec: |
-          version: 0.2
-          phases:
-            install:
-              runtime-versions:
-                  python: 3.9
-            build:
-              commands:
-                - echo Configuring AWS credentials
-                - echo AWS_CONTAINER_CREDENTIALS_RELATIVE_URI $AWS_CONTAINER_CREDENTIALS_RELATIVE_URI
-                - curl -qL -o aws_credentials.json http://169.254.170.2/$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI > aws_credentials.json
-                - aws configure set aws_access_key_id `jq -r '.AccessKeyId' aws_credentials.json`
-                - aws configure set aws_secret_access_key `jq -r '.SecretAccessKey' aws_credentials.json`
-                - aws configure set aws_session_token `jq -r '.Token' aws_credentials.json`
-                - echo "[profile default]\naccount = ${CHILD_ACCOUNT_ID}\nregion = ${AWS_REGION}\noutput = json\n" > ~/.aws/config
-                - echo "[profile crossaccount]\naccount = ${DEVOPS_ACCOUNT_ID}\nsource_profile = default\nregion = ${AWS_REGION}\noutput = json\n" >> ~/.aws/config
-                - echo "role_arn = ${CROSS_ACCOUNT_ROLE_ARN}" >> ~/.aws/config
-                - |-
-                  if  [ "${CODEBUILD_BUILD_NUMBER}" -gt "1" ]; then
-                      cd scripts && ./team_check.sh
-                      cd ../ && ./deploy.sh
                   fi
           artifacts:
             files:
