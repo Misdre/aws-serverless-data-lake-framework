@@ -32,6 +32,16 @@ Conditions:
     - "prod"
 
 Resources:
+  rMainCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+#      Code:
+#        S3:
+#          Bucket:
+#          Key: zip
+      RepositoryDescription: !Sub ${pTeamName} main repository
+      RepositoryName: !Sub sdlf-${pTeamName}-main
+
   rCodeCommitRole:
     Type: AWS::IAM::Role
     Properties:

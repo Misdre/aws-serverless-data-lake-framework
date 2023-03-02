@@ -23,6 +23,9 @@ Parameters:
   pFoundationsRepository:
     Type: String
     Default: sdlf-foundations
+  pMainRepository:
+    Type: String
+    Default: sdlf-main
 
 Mappings:
   pCodeCommitBranch:
@@ -102,6 +105,10 @@ Resources:
           - Effect: Allow
             Principal:
               Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
             Action: sts:AssumeRole
       Policies:
         - PolicyName: sdlf-cicd-codebuild
@@ -522,6 +529,24 @@ Resources:
                   - kms:List*
                   - kms:ReEncrypt*
               - Resource:
+                  - !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/sdlf-*
+                Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+              - Resource:
+                  - !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/sdlf-teams*
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:SetStackPolicy
+                  - cloudformation:UpdateStack
+              - Resource:
                   - !GetAtt rFoundationsCodeBuildProject.Arn
                 Effect: Allow
                 Action:
@@ -530,6 +555,14 @@ Resources:
               - Resource: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-foundations-codecommit-${pEnvironment}
                 Effect: Allow
                 Action: sts:AssumeRole
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt rCodeBuildRole.Arn
+                Condition:
+                  StringEqualsIfExists:
+                    iam:PassedToService:
+                      - cloudformation.amazonaws.com
+
 
   rCloudWatchRepositoryTriggerRole:
     Type: AWS::IAM::Role
@@ -656,6 +689,7 @@ Resources:
   rFoundationsCodePipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
+      Name: sdlf-cicd-foundations
       RoleArn: !GetAtt rCodePipelineRole.Arn
       Stages:
         - Name: Source
@@ -696,7 +730,53 @@ Resources:
         EncryptionKey:
           Id: !Ref pSharedDevOpsAccountKmsKeyArn
           Type: KMS
-      Name: sdlf-cicd-foundations
+
+  rTeamCodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: sdlf-cicd-team
+      RoleArn: !GetAtt rCodePipelineRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: cicd-team
+              RoleArn: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-foundations-codecommit-${pEnvironment}
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeCommit
+                Version: "1"
+              OutputArtifacts:
+                - Name: TemplateSource
+              Configuration:
+                RepositoryName: !Ref pMainRepository
+                BranchName:
+                  !FindInMap [pCodeCommitBranch, !Ref pEnvironment, branch]
+                PollForSourceChanges: false
+              RunOrder: 1
+        - Name: DeployInfrastructure
+          Actions:
+            - Name: CreateStack
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              InputArtifacts:
+                - Name: TemplateSource
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn: !GetAtt rCodeBuildRole.Arn
+                StackName: sdlf-teams
+                TemplatePath: !Sub "TemplateSource::teams-${pEnvironment}.yaml"
+                Capabilities: CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND
+              RunOrder: '1'
+      ArtifactStore:
+        Type: S3
+        Location: !Ref rArtifactsBucket
+        EncryptionKey:
+          Id: !Ref pSharedDevOpsAccountKmsKeyArn
+          Type: KMS
 
   ######## EVENTS #########
   rEventBusPolicy:
@@ -730,6 +810,30 @@ Resources:
         - Arn: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rFoundationsCodePipeline}
           RoleArn: !GetAtt rCloudWatchRepositoryTriggerRole.Arn
           Id: sdlf-cicd-foundations
+
+  rTeamCodePipelineTriggerRule:
+    Type: AWS::Events::Rule
+    Properties:
+      State: !FindInMap [pDemoMode, !Ref pDemo, state]
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        resources:
+          - !Sub arn:aws:codecommit:${AWS::Region}:${pSharedDevOpsAccountId}:${pMainRepository}
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - !FindInMap [pCodeCommitBranch, !Ref pEnvironment, branch]
+      Targets:
+        - Arn: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rTeamCodePipeline}
+          RoleArn: !GetAtt rCloudWatchRepositoryTriggerRole.Arn
+          Id: sdlf-cicd-team
 
   ######## LAKE FORMATION #########
   rDataLakeSettings:

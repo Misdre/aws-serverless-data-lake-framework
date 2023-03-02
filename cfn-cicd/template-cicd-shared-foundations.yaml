@@ -15,6 +15,9 @@ Parameters:
   pFoundationsRepository:
     Type: String
     Default: sdlf-foundations
+  pMainRepository:
+    Type: String
+    Default: sdlf-main
   pTeamRepository:
     Type: String
     Default: cfn-team
@@ -146,6 +149,7 @@ Resources:
                   - codecommit:UploadArchive
                 Resource:
                   - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pFoundationsRepository}
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pMainRepository}
               - Effect: Allow
                 Action:
                   - s3:Get*
