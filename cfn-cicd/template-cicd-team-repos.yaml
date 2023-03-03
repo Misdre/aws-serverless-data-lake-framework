@@ -292,7 +292,7 @@ Resources:
       MemorySize: 256
       Role: !GetAtt rLambdaCodeBuildTriggerRole.Arn
       Runtime: python3.9
-      Timeout: 300
+      Timeout: 450
       Environment:
         Variables:
           MAIN_REPOSITORY: !Ref pMainRepository
@@ -315,16 +315,19 @@ Resources:
           eventbridge = boto3.client('events')
 
           def delete_team_devops_role_stack(environment, team_name, cloudformation_role):
-            response = cloudformation.delete_stack(
-              StackName=f"sdlf-crossaccount-role-{environment}-{team_name}",
+            stack_name = f"sdlf-crossaccount-role-{environment}-{team_name}"
+            cloudformation.delete_stack(
+              StackName=stack_name,
               RoleARN=cloudformation_role,
             )
+            return (stack_name, 'stack_delete_complete')
 
           def create_team_devops_role_stack(environment, team_name, template_body, child_account, cloudformation_role):
             response = {}
+            stack_name = f"sdlf-crossaccount-role-{environment}-{team_name}"
             try:
               response = cloudformation.create_stack(
-                StackName=f"sdlf-crossaccount-role-{environment}-{team_name}",
+                StackName=stack_name,
                 TemplateBody=template_body,
                 Parameters=[
                   {
@@ -355,10 +358,11 @@ Resources:
                     },
                 ],
               )
+              cloudformation_waiter_type = 'stack_create_complete'
             except cloudformation.exceptions.AlreadyExistsException:
               try:
                 response = cloudformation.update_stack(
-                  StackName=f"sdlf-crossaccount-role-{environment}-{team_name}",
+                  StackName=stack_name,
                   TemplateBody=template_body,
                   Parameters=[
                     {
@@ -389,23 +393,25 @@ Resources:
                     },
                   ],
                 )
+                cloudformation_waiter_type = 'stack_update_complete'
               except ClientError as err:
                 if 'No updates are to be performed' in err.response['Error']['Message']:
                   pass
                 else:
                   raise err
 
-              logger.info("RESPONSE: %s", response)
-              return response.get("StackId")
+            logger.info("RESPONSE: %s", response)
+            return (stack_name, cloudformation_waiter_type)
 
-          def create_codecommit_approval_rule(team, repository):
+          def create_codecommit_approval_rule(team_name, repository):
+            # unfortunately codecommit approval rule cannot be defined using cloudformation
             try:
               codecommit.create_approval_rule_template(
-                approvalRuleTemplateName=f"{team}-approval-to-production",
+                approvalRuleTemplateName=f"{team_name}-approval-to-production",
                 approvalRuleTemplateContent="{\"Version\": \"2018-11-08\",\"DestinationReferences\": [\"refs/heads/master\"],\"Statements\": [{\"Type\": \"Approvers\",\"NumberOfApprovalsNeeded\": 1}]}"
               )
               codecommit.associate_approval_rule_template_with_repository(
-                approvalRuleTemplateName=f"{team}-approval-to-production",
+                approvalRuleTemplateName=f"{team_name}-approval-to-production",
                 repositoryName=repository
               )
             except codecommit.exceptions.ApprovalRuleTemplateNameAlreadyExistsException:
@@ -413,7 +419,6 @@ Resources:
 
           def lambda_handler(event, context):
               logger.info("EVENT: %s", event)
-              commit_hash = event['detail']['commitId']
               region = event['region']
               repo_name = event['detail']['repositoryName']
               account_id = event['account']
@@ -465,14 +470,47 @@ Resources:
               # note this whole lambda assumes teams aren't defined in files other than teams-{environment}.yaml
               legacy_teams = list(set(existing_teams) - set(teams))
               logger.info("LEGACY TEAMS: %s", legacy_teams)
+              cloudformation_waiters = {
+                "stack_delete_complete" = [],
+              }
               for legacy_team in legacy_teams:
-                delete_team_devops_role_stack(environment, team, cloudformation_role)
+                stack_details = delete_team_devops_role_stack(environment, legacy_team, cloudformation_role)
+                cloudformation_waiters[stack_details[1]].append(stack_details[0])
+                codecommit.delete_approval_rule_template(approvalRuleTemplateName=f"{team}-approval-to-production")
+              cloudformation_waiter = cloudformation.get_waiter('stack_delete_complete')
+              for stack in cloudformation_waiters["stack_delete_complete"]:
+                cloudformation_waiter.wait(StackName=stack,
+                  WaiterConfig={
+                    'Delay': 30,
+                    'MaxAttempts': 10
+                  }
+                )
 
               # create/update stacks for teams defined in git
+              cloudformation_waiters = {
+                "stack_create_complete" = [],
+                "stack_update_complete" = []
+              }
               for team in teams:
-                create_team_devops_role_stack(environment, team, template_team_repos['fileContent'].decode("utf-8"), child_account, cloudformation_role)
+                stack_details = create_team_devops_role_stack(environment, team, template_team_repos['fileContent'].decode("utf-8"), child_account, cloudformation_role)
+                cloudformation_waiters[stack_details[1]].append(stack_details[0])
                 create_codecommit_approval_rule(team, main_repository)
-              # then wait on stack (gaffe au timeout lambda) TODO
+              cloudformation_create_waiter = cloudformation.get_waiter('stack_create_complete')
+              cloudformation_update_waiter = cloudformation.get_waiter('stack_update_complete')
+              for stack in cloudformation_waiters["stack_create_complete"]:
+                cloudformation_create_waiter.wait(StackName=stack,
+                  WaiterConfig={
+                    'Delay': 30,
+                    'MaxAttempts': 10
+                  }
+                )
+              for stack in cloudformation_waiters["stack_update_complete"]:
+                cloudformation_update_waiter.wait(StackName=stack,
+                  WaiterConfig={
+                    'Delay': 30,
+                    'MaxAttempts': 10
+                  }
+                )
 
               # forward input event as is to the child account event bus
               if child_account != account_id:
