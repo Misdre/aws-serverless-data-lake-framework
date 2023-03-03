@@ -447,10 +447,11 @@ Resources:
                   if "pTeamName:" in line:
                       teams.append(line.split(":", 1)[-1].strip())
               logger.info("TEAMS: %s", teams)
-
-              existing_stacks = cloudformation.list_stacks(
-                  StackStatusFilter=["CREATE_COMPLETE", "UPDATE_COMPLETE"]
-              )  # pagination would be useful TODO
+              paginator = cloudformation.get_paginator('list_stacks')
+              existing_stacks = paginator.paginate(
+                  StackStatusFilter=["CREATE_COMPLETE", "UPDATE_COMPLETE"],
+                  PaginationConfig={'MaxItems': 30}
+              )
               existing_teams = [
                   existing_stack["StackName"].removeprefix(f"sdlf-crossaccount-role-{environment}-")
                   for existing_stack in existing_stacks["StackSummaries"]
