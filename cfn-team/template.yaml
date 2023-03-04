@@ -1827,6 +1827,180 @@ Resources:
             InputPathsMap:
               pipeline: $.detail.pipeline
 
+  rPipelinesDynamodbLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: !Sub Creates/updates DynamoDB entries for ${pTeamName} pipelines
+      FunctionName: !Sub sdlf-${pTeamName}-pipelines-dynamodb
+      Handler: index.lambda_handler
+      MemorySize: 192
+      Role: !GetAtt rLambdaCodeBuildTriggerRole.Arn
+      Runtime: python3.9
+      Timeout: 300
+      Environment:
+        Variables:
+          TEAM_NAME: !Ref pTeamName
+          ENVIRONMENT: !Ref pEnvironment
+      Code:
+        ZipFile: |
+          import logging
+          import os
+
+          import boto3
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          dynamodb = boto3.client("dynamodb")
+          ssm = boto3.client("ssm")
+
+
+          def delete_dynamodb_pipeline_entry(table_name, team_name, pipeline_name, stage_name):
+              response = dynamodb.delete_item(
+                  TableName=table_name,
+                  Key={"name": {"S": f"{team_name}-{pipeline_name}-{pipeline_stage}"}},
+              )
+              return response
+
+
+          def create_dynamodb_pipeline_entry(
+              table_name, team_name, pipeline_name, stage_name, entrypoint
+          ):
+              response = dynamodb.update_item(
+                  TableName=table_name,
+                  Key={"name": {"S": f"{team_name}-{pipeline_name}-{pipeline_stage}"}},
+                  ExpressionAttributeNames={
+                      "#N": "name",
+                      "#T": "type",
+                      "#S": "status",
+                      "#EP": "entrypoint",
+                      "#V": "version",
+                  },
+                  ExpressionAttributeValues={
+                      ":t": {
+                          "S": "TRANSFORMATION",
+                      },
+                      ":s": {"S": "ACTIVE"},
+                      ":ep": {"S": entrypoint},
+                      ":v": {"N": "1"},
+                  },
+                  UpdateExpression="SET #T = :t, #S = :s, #EP = :ep, #V = :v",
+                  ReturnValues="UPDATED_NEW",
+              )
+              return response
+
+
+          def lambda_handler(event, context):
+              environment = os.getenv("ENVIRONMENT")
+              team_name = os.getenv("TEAM_NAME")
+              table = f"octagon-Pipelines-{environment}"
+              paginator = ssm.get_paginator("get_parameters_by_path")
+              stages = paginator.paginate(
+                  Path=f"/SDLF/Pipelines/{team_name}",
+                  Recursive=True,
+                  PaginationConfig={"MaxItems": 30},
+              )
+              for stage in stages["Parameters"]:
+                  pipeline_name = stage["Name"].split("/")[-2]
+                  stage_name = stage["Name"].split("/")[-1]
+                  if stage["Value"] == "entrypoint":
+                      entrypoint = "true"  # not a boolean in dynamodb
+                  else:
+                      entrypoint = "false"
+                  create_dynamodb_pipeline_entry(
+                      table, team_name, pipeline_name, stage_name, entrypoint
+                  )
+                  logger.info(
+                      f"{team_name}-{pipeline_name}-{stage_name} DynamoDB Pipeline entry created"
+                  )
+
+              logger.info(
+                  "INFO: Entries for stages that no longer exist are not removed from DynamoDB"
+              )
+              return "Success"
+
+  rDatasetsDynamodbLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: !Sub Creates/updates DynamoDB entries for ${pTeamName} datasets
+      FunctionName: !Sub sdlf-${pTeamName}-datasets-dynamodb
+      Handler: index.lambda_handler
+      MemorySize: 192
+      Role: !GetAtt rLambdaCodeBuildTriggerRole.Arn
+      Runtime: python3.9
+      Timeout: 300
+      Environment:
+        Variables:
+          TEAM_NAME: !Ref pTeamName
+          ENVIRONMENT: !Ref pEnvironment
+      Code:
+        ZipFile: |
+          import logging
+          import os
+
+          import boto3
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          dynamodb = boto3.client("dynamodb")
+          ssm = boto3.client("ssm")
+
+
+          def delete_dynamodb_dataset_entry(table_name, team_name, dataset_name):
+              response = dynamodb.delete_item(
+                  TableName=table_name,
+                  Key={"name": {"S": f"{team_name}-{dataset_name}"}},
+              )
+              return response
+
+
+          def create_dynamodb_dataset_entry(table_name, team_name, dataset_name, pipeline_name):
+              response = dynamodb.update_item(
+                  TableName=table_name,
+                  Key={"name": {"S": f"{team_name}-{dataset_name}"}},
+                  ExpressionAttributeNames={
+                      "#P": "pipeline",
+                      "#T": "transforms",
+                      "#MXIP": "max_items_process",
+                      "#MIP": "min_items_process",
+                      "#V": "version",
+                  },
+                  ExpressionAttributeValues={
+                      ":p": {"S": pipeline_name},
+                      ":t": {"M":{"stage_a_transform": {"S": "light_transform_blueprint"},"stage_b_transform": {"S": "heavy_transform_blueprint"}}}, # todo replace with a nested "pipeline_modifiers" field
+                      ":mxip": {"M":{"stage_b": {"N": "100"},"stage_c": {"N": "100"}}},
+                      ":mip": {"M":{"stage_b": {"N": "1"},"stage_c": {"N": "1"}}},
+                      ":v": {"N": "1"},
+                  },
+                  UpdateExpression="SET #P = :p, #T = :st, #MXIP = :mxip, #MIP = :mip, #V = :v",
+                  ReturnValues="UPDATED_NEW",
+              )
+              return response
+
+
+          def lambda_handler(event, context):
+              environment = os.getenv("ENVIRONMENT")
+              team_name = os.getenv("TEAM_NAME")
+              table = f"octagon-Datasets-{environment}"
+              paginator = ssm.get_paginator("get_parameters_by_path")
+              datasets = paginator.paginate(
+                  Path=f"/SDLF/Datasets/{team_name}",
+                  PaginationConfig={"MaxItems": 30},
+              )
+              for dataset in datasets["Parameters"]:
+                  dataset_name = dataset["Name"].split("/")[-1]
+                  pipeline_name = dataset["Value"]
+                  create_dynamodb_dataset_entry(table, team_name, dataset_name, pipeline_name)
+                  logger.info(
+                      f"{team_name}-{dataset_name} DynamoDB Dataset entry created"
+                  )
+
+              logger.info(
+                  "INFO: Entries for datasets that no longer exist are not removed from DynamoDB"
+              )
+              return "Success"
+
   rPipelineTeamCodePipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
@@ -1866,6 +2040,15 @@ Resources:
                 TemplatePath: !Sub "TemplateSource::pipelines-${pEnvironment}.yaml"
                 Capabilities: CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND
               RunOrder: '1'
+            - Name: CreateDynamodbEntry
+              ActionTypeId:
+                Category: Invoke
+                Owner: AWS
+                Provider: Lambda
+                Version: '1'
+              Configuration:
+                FunctionName: !Ref rPipelinesDynamodbLambda
+              RunOrder: '2'
       ArtifactStore:
         Type: S3
         EncryptionKey:
@@ -1912,6 +2095,15 @@ Resources:
                 TemplatePath: !Sub "TemplateSource::datasets-${pEnvironment}.yaml"
                 Capabilities: CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND
               RunOrder: '1'
+            - Name: CreateDynamodbEntry
+              ActionTypeId:
+                Category: Invoke
+                Owner: AWS
+                Provider: Lambda
+                Version: '1'
+              Configuration:
+                FunctionName: !Ref rDatasetsDynamodbLambda
+              RunOrder: '2'
       ArtifactStore:
         Type: S3
         EncryptionKey:
