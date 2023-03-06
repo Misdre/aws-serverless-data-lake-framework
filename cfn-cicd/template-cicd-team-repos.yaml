@@ -25,6 +25,45 @@ Mappings:
       branch: master
 
 Resources:
+  ######## S3 #########
+  rArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub sdlf-cicd-devops-cfn-artifacts-${AWS::Region}-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: True
+        BlockPublicPolicy: True
+        IgnorePublicAcls: True
+        RestrictPublicBuckets: True
+
+  rArtifactsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref rArtifactsBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !Sub ${rArtifactsBucket.Arn}/*
+              - !GetAtt rArtifactsBucket.Arn
+            Condition:
+              Bool:
+                aws:SecureTransport: False
+
+  rCFNBucketSsm:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /SDLF/S3/DevOpsCFNBucket
+      Type: String
+      Value: !Ref rArtifactsBucket
+      Description: S3 DevOps CFN Artifacts Bucket
+
   ######## IAM #########
   rTeamReposCodeBuildRole:
     Type: AWS::IAM::Role
