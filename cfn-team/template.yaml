@@ -1827,6 +1827,64 @@ Resources:
             InputPathsMap:
               pipeline: $.detail.pipeline
 
+  rLambdaCodeBuildTriggerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub sdlf-${pTeamName}-dynamodb-lambda
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub sdlf-${pTeamName}-dynamodb-lambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:DeleteItem
+                  - dynamodb:UpdateItem
+                Resource:
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/octagon-Pipelines-${pEnvironment}
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/octagon-Datasets-${pEnvironment}
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DescribeLogGroups
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:DeleteLogStream
+                  - logs:DeleteLogGroup
+                  - logs:DescribeLogStreams
+                  - logs:PutLogEvents
+                  - logs:PutRetentionPolicy
+                  - logs:TagLogGroup
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/sdlf-${pTeamName}-*:log-stream:*
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/sdlf-${pTeamName}-*:log-stream:*
+              - Effect: Allow
+                Action:
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:PutMetricData
+                  - cloudwatch:SetAlarmState
+                Resource:
+                  - !Sub arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:sdlf-${pTeamName}-*
+              - Effect: Allow
+                Action:
+                  - ssm:GetParametersByPath
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/SDLF/Pipelines/${pTeamName}/*
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/SDLF/Datasets/${pTeamName}/*
+
   rPipelinesDynamodbLambda:
     Type: AWS::Lambda::Function
     Properties:
