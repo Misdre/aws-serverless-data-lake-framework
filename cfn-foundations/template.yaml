@@ -3,6 +3,9 @@ Transform: AWS::Serverless-2016-10-31
 Description: Resources to be created by the common stack
 
 Parameters:
+  pPipelineReference:
+    Type: String
+    Default: none
   pApplicationName:
     Description: Name of the application (all lowercase, no symbols or spaces)
     Type: String
@@ -1330,3 +1333,8 @@ Resources:
       Type: String
       Value: !Ref pApplicationName
       Description: Name of the Application
+
+Outputs:
+  oPipelineReference:
+    Description: CodePipeline reference this stack has been deployed with
+    Value: !Ref pPipelineReference

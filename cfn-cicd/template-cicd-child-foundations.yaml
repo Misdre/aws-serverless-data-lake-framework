@@ -755,6 +755,7 @@ Resources:
                 Owner: AWS
                 Provider: CodeCommit
                 Version: "1"
+              Namespace: SourceVariables
               OutputArtifacts:
                 - Name: TemplateSource
               Configuration:
@@ -778,6 +779,10 @@ Resources:
                 RoleArn: !GetAtt rCodeBuildRole.Arn
                 StackName: sdlf-foundations
                 TemplatePath: !Sub "TemplateSource::foundations-${pEnvironment}.yaml"
+                ParameterOverrides: |
+                  {
+                    "pPipelineReference" : "#{codepipeline.PipelineExecutionId}"
+                  }
                 Capabilities: CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND
               RunOrder: '1'
         - Name: DeployTeamInfrastructure
@@ -795,6 +800,10 @@ Resources:
                 RoleArn: !GetAtt rCodeBuildRole.Arn
                 StackName: sdlf-teams
                 TemplatePath: !Sub "TemplateSource::teams-${pEnvironment}.yaml"
+                ParameterOverrides: |
+                  {
+                    "pPipelineReference" : "#{codepipeline.PipelineExecutionId}"
+                  }
                 Capabilities: CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND
               RunOrder: '1'
       ArtifactStore:
