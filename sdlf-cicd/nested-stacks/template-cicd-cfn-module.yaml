@@ -18,13 +18,13 @@ Parameters:
     Default: /SDLF/Misc/pEnv
   pTeamRepository:
     Type: String
-    Default: cfn-team
+    Default: sdlf-team
   pPipelineRepository:
     Type: String
-    Default: cfn-pipeline
+    Default: sdlf-pipeline
   pDatasetRepository:
     Type: String
-    Default: cfn-dataset
+    Default: sdlf-dataset
   pSharedDevOpsAccountKmsKeyArn:
     Description: Arn of the KMS key in the Shared DevOps account
     Type: String

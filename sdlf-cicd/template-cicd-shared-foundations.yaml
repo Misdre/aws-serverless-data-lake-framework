@@ -18,22 +18,22 @@ Parameters:
     ConstraintDescription: Must be an AWS account ID
   pFoundationsRepository:
     Type: String
-    Default: cfn-foundations
+    Default: sdlf-foundations
   pMainRepository:
     Type: String
     Default: sdlf-main
   pTeamRepository:
     Type: String
-    Default: cfn-team
+    Default: sdlf-team
   pPipelineRepository:
     Type: String
-    Default: cfn-pipeline
+    Default: sdlf-pipeline
   pDatasetRepository:
     Type: String
-    Default: cfn-dataset
+    Default: sdlf-dataset
   pStageRepositoryPrefix:
     Type: String
-    Default: cfn-stage-*
+    Default: sdlf-stage*
   pDatalakeLibraryRepositoryName:
     Description: Name of the repository containing the code for the Datalake Library.
     Type: String
