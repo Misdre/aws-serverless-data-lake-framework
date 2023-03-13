@@ -9,22 +9,19 @@ Parameters:
   pSharedDevOpsAccountId:
     Type: AWS::SSM::Parameter::Value<String>
     Default: /SDLF/Misc/DevOpsAccountId
-  pDevops:
-    Type: String
-    Default: ""
 
   pEnvironment:
     Type: AWS::SSM::Parameter::Value<String>
     Default: /SDLF/Misc/pEnv
   pTeamRepository:
     Type: String
-    Default: cfn-team
+    Default: sdlf-team
   pPipelineRepository:
     Type: String
-    Default: cfn-pipeline
+    Default: sdlf-pipeline
   pDatasetRepository:
     Type: String
-    Default: cfn-dataset
+    Default: sdlf-dataset
   pSharedDevOpsAccountKmsKeyArn:
     Description: Arn of the KMS key in the Shared DevOps account
     Type: String
@@ -162,7 +159,7 @@ Resources:
   rBuildCloudformationModuleStage:
     Type: AWS::CodeBuild::Project
     Properties:
-      Name: !Sub sdlf-cicd-${pDevops}build-cfn-module-codebuild
+      Name: !Sub sdlf-cicd-build-cfn-module-codebuild
       Artifacts:
         Type: CODEPIPELINE
       Description: Build a CloudFormation module from Serverless templates
@@ -226,7 +223,7 @@ Resources:
   rBuildCloudformationModuleStageSsm:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: !Sub /SDLF/CodeBuild/${pDevops}BuildCloudformationModuleStage
+      Name: !Sub /SDLF/CodeBuild/BuildCloudformationModuleStage
       Type: String
       Value: !Ref rBuildCloudformationModuleStage
       Description: Name of the CodeBuild job that build a CloudFormation module from a SAM template
