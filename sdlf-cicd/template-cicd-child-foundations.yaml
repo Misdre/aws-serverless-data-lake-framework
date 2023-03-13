@@ -22,16 +22,10 @@ Parameters:
     Type: String
   pFoundationsRepository:
     Type: String
-    Default: cfn-foundations
+    Default: sdlf-foundations
   pMainRepository:
     Type: String
     Default: sdlf-main
-  pPipelineRepository:
-    Type: String
-    Default: cfn-pipeline
-  pDatasetRepository:
-    Type: String
-    Default: cfn-dataset
 
 Mappings:
   pCodeCommitBranch:

@@ -10,10 +10,10 @@ Parameters:
     Default: /SDLF/Misc/DevOpsAccountId
   pPipelineRepository:
     Type: String
-    Default: cfn-pipeline
+    Default: sdlf-pipeline
   pDatasetRepository:
     Type: String
-    Default: cfn-dataset
+    Default: sdlf-dataset
   pSharedDevOpsAccountKmsKeyArn:
     Description: Arn of the KMS key in the Shared DevOps account
     Type: String
@@ -538,7 +538,7 @@ Resources:
     Properties:
       TemplateURL: ./nested-stacks/template-stage-statemachine.yaml
       Parameters:
-        pStageRepository: cfn-stageA
+        pStageRepository: sdlf-stageA
         pStageName: stageA
         pSharedDevOpsAccountKmsKeyArn: !Ref pSharedDevOpsAccountKmsKeyArn
         pEventBridgeRepositoryTriggerRoleArn: /SDLF/IAM/EventBridgeRepositoryTriggerRoleArn
@@ -551,7 +551,7 @@ Resources:
     Properties:
       TemplateURL: ./nested-stacks/template-stage-statemachine.yaml
       Parameters:
-        pStageRepository: cfn-stageB
+        pStageRepository: sdlf-stageB
         pStageName: stageB
         pSharedDevOpsAccountKmsKeyArn: !Ref pSharedDevOpsAccountKmsKeyArn
         pEventBridgeRepositoryTriggerRoleArn: /SDLF/IAM/EventBridgeRepositoryTriggerRoleArn
