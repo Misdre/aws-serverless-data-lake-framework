@@ -193,6 +193,11 @@ Resources:
                 Action: iam:PassRole
               - Resource:
                   - !Sub arn:aws:iam::${AWS::AccountId}:role/sdlf-*
+                Effect: Allow
+                Action:
+                  - iam:UpdateAssumeRolePolicy
+              - Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/sdlf-*
                   - !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/*
                   - !Sub arn:aws:iam::${AWS::AccountId}:role/service-role/*
                   - !Sub arn:aws:iam::${AWS::AccountId}:role/state-machine/sdlf-*
@@ -596,6 +601,7 @@ Resources:
                   - !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rFoundationsCodePipeline}
                   - !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rTeamCodePipeline}
                   - !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:sdlf-cicd-cfn-modules-*
+                  - !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:sdlf-*
 
   # Role defined upstream due to Lake Formation PutDataLakeSettings constraints
   rDataLakeAdminRole:
@@ -778,7 +784,7 @@ Resources:
               Configuration:
                 ActionMode: CREATE_UPDATE
                 RoleArn: !GetAtt rCodeBuildRole.Arn
-                StackName: sdlf-foundations
+                StackName: !Sub sdlf-foundations-${pEnvironment}
                 TemplatePath: !Sub "TemplateSource::foundations-${pEnvironment}.yaml"
                 ParameterOverrides: |
                   {
@@ -799,7 +805,7 @@ Resources:
               Configuration:
                 ActionMode: CREATE_UPDATE
                 RoleArn: !GetAtt rCodeBuildRole.Arn
-                StackName: sdlf-teams
+                StackName: !Sub sdlf-teams-${pEnvironment}
                 TemplatePath: !Sub "TemplateSource::teams-${pEnvironment}.yaml"
                 ParameterOverrides: |
                   {
