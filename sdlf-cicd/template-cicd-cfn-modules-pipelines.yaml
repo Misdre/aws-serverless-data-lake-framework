@@ -911,7 +911,7 @@ Resources:
             Type: PLAINTEXT
             Value: !GetAtt rCodeBuildPublishLayerRole.Arn
         ComputeType: BUILD_GENERAL1_SMALL
-        Image: aws/codebuild/standard:4.0
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
         Type: LINUX_CONTAINER
       QueuedTimeoutInMinutes: 60
       ServiceRole: !GetAtt rCodeBuildServiceRole.Arn
@@ -955,7 +955,7 @@ Resources:
             Type: PLAINTEXT
             Value: !GetAtt rCodeBuildPublishLayerRole.Arn
         ComputeType: BUILD_GENERAL1_SMALL
-        Image: aws/codebuild/standard:4.0
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
         Type: LINUX_CONTAINER
       QueuedTimeoutInMinutes: 60
       ServiceRole: !GetAtt rCodeBuildServiceRole.Arn
@@ -1259,7 +1259,7 @@ Resources:
             Type: PLAINTEXT
             Value: !Ref pMinTestCoverage
         ComputeType: BUILD_GENERAL1_SMALL
-        Image: aws/codebuild/standard:4.0
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
         Type: LINUX_CONTAINER
       ServiceRole: !GetAtt rCodeBuildServiceRole.Arn
       TimeoutInMinutes: 20
