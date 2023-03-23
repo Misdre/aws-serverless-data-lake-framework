@@ -1,0 +1,2728 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CICD for SDLF
+
+Parameters:
+  pPipelineReference:
+    Type: String
+    Default: none
+  pCustomBucketPrefix:
+    Description: S3 Bucket Prefix if different from default. Must be a valid S3 Bucket name
+    Type: String
+    Default: sdlf
+  pSharedDevOpsAccountId:
+    Description: Shared DevOps AWS account ID
+    Type: String
+    AllowedPattern: (\d{12}|^$)
+    ConstraintDescription: Must be an AWS account ID
+  pPrivateSdlfModules:
+    Type: String
+    Default: false
+  pEnvironment:
+    Description: Environment name
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+  pCicdRepository:
+    Type: String
+    Default: sdlf-cicd
+  pFoundationsRepository:
+    Type: String
+    Default: sdlf-foundations
+  pTeamRepository:
+    Type: String
+    Default: sdlf-team
+  pPipelineRepository:
+    Type: String
+    Default: sdlf-pipeline
+  pStageARepository:
+    Type: String
+    Default: sdlf-stageA
+  pStageBRepository:
+    Type: String
+    Default: sdlf-stageB
+  pDatasetRepository:
+    Type: String
+    Default: sdlf-dataset
+  pMainRepository:
+    Type: String
+    Default: sdlf-main
+  pDatalakeLibraryRepositoryName:
+    Description: Name of the repository containing the code for the Datalake Library.
+    Type: String
+    Default: sdlf-datalakeLibrary
+  pDatalakeLibsLambdaLayerName:
+    Description: Name to give the Lambda Layer containing the Datalake Library.
+    Type: String
+    Default: datalake-lib-layer
+  pDefaultPipLibrariesLambdaLayerName:
+    Description: Name to give the Lambda Layer containing the libraries installed through Pip.
+    Type: String
+    Default: default-pip-libraries
+  pLibrariesBranchName:
+    Description: Name of the default branch for Python libraries
+    Type: String
+    Default: master
+  pMinTestCoverage:
+    Description: "[OPTIONAL] The minimum code coverage percentage that is required for the pipeline to proceed to the next stage. Specify only if `pEnforceCodeCoverage` is set to 'true'."
+    Type: String
+    Default: 80
+  pPipLibrariesRepositoryName:
+    Description: The repository containing requirements.txt
+    Type: String
+    Default: sdlf-pipLibrary
+  pRunCodeCoverage:
+    Description: "Creates code coverage reports from the unit tests included in `pDatalakeLibraryRepositoryName`. Enforces the minimum threshold specified in `pMinTestCoverage`"
+    Type: String
+    AllowedValues: ["false", "true"]
+    Default: "false"
+
+Mappings:
+  pCodeCommitBranch:
+    dev:
+      branch: dev
+    test:
+      branch: test
+    prod:
+      branch: master
+
+Conditions:
+  CrossAccount:
+    !Not [!Equals [!Ref pSharedDevOpsAccountId, !Ref "AWS::AccountId"]]
+  PrivateSdlfModules: !Equals [!Ref pPrivateSdlfModules, "true" ]
+  RunUnitTestingStage: !Equals
+    - !Ref pRunCodeCoverage
+    - "true"
+  NotRunUnitTestingStage: !Not
+    - Condition: RunUnitTestingStage
+
+Resources:
+  rKMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS Key for Encryption of CodePipeline Artifacts in Child Account
+      Enabled: true
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: 2012-10-17
+        Statement:
+          - Sid: Allow administration of the key
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+          - Sid: Allow logs access
+            Effect: Allow
+            Principal:
+              Service: !Sub logs.${AWS::Region}.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:DescribeKey
+              - kms:Encrypt
+              - kms:GenerateDataKey*
+              - kms:ReEncrypt*
+            Resource: "*"
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+
+  rKMSKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/sdlf-cicd-kms-key-${pEnvironment}
+      TargetKeyId: !Ref rKMSKey
+
+  ######## S3 #########
+  rArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${pCustomBucketPrefix}-cfn-artifacts-${AWS::Region}-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: True
+        BlockPublicPolicy: True
+        IgnorePublicAcls: True
+        RestrictPublicBuckets: True
+
+  rArtifactsBucketPolicy:
+    Condition: CrossAccount
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref rArtifactsBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:root
+            Action:
+              - s3:GetBucketLocation
+              - s3:ListBucket
+            Resource:
+              - !Sub arn:aws:s3:::${rArtifactsBucket}
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:root
+            Action:
+              - s3:Get*
+              - s3:PutObject
+            Resource:
+              - !Sub arn:aws:s3:::${rArtifactsBucket}/*
+          - Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !Sub arn:aws:s3:::${rArtifactsBucket}/*
+              - !Sub arn:aws:s3:::${rArtifactsBucket}
+            Condition:
+              Bool:
+                aws:SecureTransport: False
+
+  ######## CODEPIPELINE: DEPLOY A NEW CHILD ACCOUNT #########
+  rTeamCreationCloudFormationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sdlf-cicd-team-cloudformation
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: sdlf-cicd-team-cloudformation
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-components-codecommit
+                Effect: Allow
+                Action: sts:AssumeRole
+              - Resource:
+                  - !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/sdlf-*
+                  - !Sub arn:aws:cloudformation:${AWS::Region}:aws:transform/*
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:SetStackPolicy
+                  - cloudformation:UpdateStack
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - cloudformation:GetTemplate
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:ListStacks
+                  - cloudformation:ValidateTemplate
+              - Resource: !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/octagon-*
+                Effect: Allow
+                Action:
+                  - dynamodb:CreateTable
+                  - dynamodb:DeleteTable
+                  - dynamodb:DescribeTable
+                  - dynamodb:DescribeTimeToLive
+                  - dynamodb:ListTagsOfResource
+                  - dynamodb:TagResource
+                  - dynamodb:UntagResource
+                  - dynamodb:UpdateTable
+                  - dynamodb:UpdateTimeToLive
+                  - dynamodb:DescribeContinuousBackups
+                  - dynamodb:UpdateContinuousBackups
+              - Resource: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/sdlf-*
+                Effect: Allow
+                Action:
+                  - events:DeleteRule
+                  - events:DescribeRule
+                  - events:DisableRule
+                  - events:EnableRule
+                  - events:PutRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+              - Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/*
+                Effect: Allow
+                Action: iam:PassRole
+                Condition:
+                  StringEqualsIfExists:
+                    iam:PassedToService:
+                      - cloudformation.amazonaws.com
+                      - codebuild.amazonaws.com
+                      - codepipeline.amazonaws.com
+                      - lambda.amazonaws.com
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListPolicies
+                  - iam:ListPolicyVersions
+                  - iam:ListRoles
+                  - iam:ListRolePolicies
+              - Resource: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-team-codecommit-${pEnvironment}-*
+                Effect: Allow
+                Action: iam:PassRole
+              - Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/sdlf-*
+                Effect: Allow
+                Action:
+                  - iam:UpdateAssumeRolePolicy
+              - Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/service-role/*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/state-machine/sdlf-*
+                Effect: Allow
+                Action:
+                  - iam:AttachRolePolicy
+                  - iam:CreateRole
+                  - iam:CreateServiceLinkedRole
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PassRole
+                  - iam:PutRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:UpdateRole
+                  - iam:UpdateRoleDescription
+              - Resource: !Sub arn:aws:iam::${AWS::AccountId}:policy/sdlf-*
+                Effect: Allow
+                Action:
+                  - iam:CreatePolicy
+                  - iam:CreatePolicyVersion
+                  - iam:DeletePolicy
+                  - iam:DeletePolicyVersion
+                  - iam:GetPolicy
+                  - iam:GetPolicyVersion
+              - Resource: "*"
+                Effect: "Allow"
+                Action: lambda:ListFunctions
+              - Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:sdlf-*
+                Effect: Allow
+                Action:
+                  - lambda:AddPermission
+                  - lambda:CreateAlias
+                  - lambda:CreateFunction
+                  - lambda:DeleteFunction
+                  - lambda:DeleteFunctionConcurrency
+                  - lambda:DeleteLayerVersion
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:GetLayerVersion
+                  - lambda:InvokeFunction
+                  - lambda:ListFunctions
+                  - lambda:ListLayers
+                  - lambda:ListLayerVersions
+                  - lambda:ListTags
+                  - lambda:PublishVersion
+                  - lambda:PutFunctionConcurrency
+                  - lambda:RemovePermission
+                  - lambda:RevokePermission
+                  - lambda:TagResource
+                  - lambda:UntagResource
+                  - lambda:UpdateAlias
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+              - Resource: "*"
+                Effect: "Allow"
+                Action:
+                  - lambda:CreateEventSourceMapping
+                  - lambda:GetEventSourceMapping
+                  - lambda:UpdateEventSourceMapping
+                  - lambda:DeleteEventSourceMapping
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - states:CreateStateMachine
+                  - states:ListStateMachines
+                  - states:TagResource
+                  - states:UntagResource
+              - Resource: !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:sdlf-*"
+                Effect: Allow
+                Action:
+                  - states:DeleteStateMachine
+                  - states:DescribeStateMachine
+                  - states:UpdateStateMachine
+              - Resource: "*"
+                Effect: "Allow"
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DescribeLogGroups
+              - Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:sdlf-*:log-stream:*
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/sdlf-*:log-stream:*
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/sdlf-*:log-stream:*
+                Effect: Allow
+                Action:
+                  - logs:PutRetentionPolicy
+                  - logs:CreateLogStream
+                  - logs:DeleteLogGroup
+                  - logs:DeleteLogStream
+                  - logs:DescribeLogStreams
+                  - logs:PutLogEvents
+                  - logs:TagLogGroup
+                  - logs:UntagLogGroup
+              - Resource: !Sub arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:sdlf-*
+                Effect: Allow
+                Action:
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:DisableAlarmActions
+                  - cloudwatch:EnableAlarmActions
+                  - cloudwatch:GetMetricData
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:PutMetricData
+                  - cloudwatch:SetAlarmState
+              - Resource: !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:*
+                Effect: Allow
+                Action: sns:ListTopics
+              - Resource: !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:sdlf-*
+                Effect: Allow
+                Action:
+                  - sns:CreateTopic
+                  - sns:DeleteTopic
+                  - sns:GetTopicAttributes
+                  - sns:Publish
+                  - sns:SetTopicAttributes
+                  - sns:Subscribe
+                  - sns:Unsubscribe
+                  - sns:TagResource
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:DeleteBucketPolicy
+                  - s3:Get*
+                  - s3:List*
+                  - s3:Put*
+                  - s3:SetBucketEncryption
+              - Resource: !Sub arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/sdlf-*
+                Effect: Allow
+                Action:
+                  - codebuild:BatchGetProjects
+                  - codebuild:BatchGetBuilds
+                  - codebuild:CreateProject
+                  - codebuild:DeleteProject
+                  - codebuild:UpdateProject
+              - Resource: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:sdlf-*
+                Effect: Allow
+                Action:
+                  - codepipeline:CreatePipeline
+                  - codepipeline:DeletePipeline
+                  - codepipeline:GetPipelineState
+                  - codepipeline:GetPipeline
+                  - codepipeline:UpdatePipeline
+              - Resource: !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:*
+                Effect: Allow
+                Action: sqs:ListQueues
+              - Resource: !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:sdlf-*
+                Effect: Allow
+                Action:
+                  - sqs:AddPermission
+                  - sqs:CreateQueue
+                  - sqs:ChangeMessageVisibility
+                  - sqs:ChangeMessageVisibilityBatch
+                  - sqs:DeleteQueue
+                  - sqs:GetQueueAttributes
+                  - sqs:GetQueueUrl
+                  - sqs:ListQueues
+                  - sqs:ListQueueTags
+                  - sqs:RemovePermission
+                  - sqs:SendMessage
+                  - sqs:SendMessageBatch
+                  - sqs:SetQueueAttributes
+                  - sqs:TagQueue
+                  - sqs:UntagQueue
+              - Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/SDLF/*
+                Effect: Allow
+                Action:
+                  - ssm:AddTagsToResource
+                  - ssm:DeleteParameter
+                  - ssm:DeleteParameters
+                  - ssm:DescribeParameters
+                  - ssm:GetOpsSummary
+                  - ssm:GetParameter
+                  - ssm:GetParameterHistory
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                  - ssm:ListTagsForResource
+                  - ssm:PutParameter
+                  - ssm:RemoveTagsFromResource
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - lakeformation:DeregisterResource
+                  - lakeformation:GetDataAccess
+                  - lakeformation:GrantPermissions
+                  - lakeformation:PutDataLakeSettings
+                  - lakeformation:RegisterResource
+                  - lakeformation:RevokePermissions
+                  - lakeformation:UpdateResource
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - cloudtrail:DescribeTrails
+              - Resource: !Sub arn:aws:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/sdlf-*
+                Effect: Allow
+                Action:
+                  - cloudtrail:AddTags
+                  - cloudtrail:CreateTrail
+                  - cloudtrail:DeleteTrail
+                  - cloudtrail:ListTags
+                  - cloudtrail:PutEventSelectors
+                  - cloudtrail:RemoveTags
+                  - cloudtrail:StartLogging
+                  - cloudtrail:StopLogging
+                  - cloudtrail:UpdateTrail
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - kms:CreateAlias
+                  - kms:CreateKey
+                  - kms:DeleteAlias
+                  - kms:ListAliases
+                  - kms:ListGrants
+                  - kms:ListKeyPolicies
+                  - kms:ListKeys
+                  - kms:ListResourceTags
+                  - kms:UpdateAlias
+              - Resource:
+                  - !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*
+                  - !Sub arn:aws:kms:${AWS::Region}:${pSharedDevOpsAccountId}:key/*
+                Effect: Allow
+                Action:
+                  - kms:CreateGrant
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                  - kms:DisableKey
+                  - kms:DisableKeyRotation
+                  - kms:EnableKey
+                  - kms:EnableKeyRotation
+                  - kms:Encrypt
+                  - kms:GenerateDataKey
+                  - kms:GetKeyPolicy
+                  - kms:PutKeyPolicy
+                  - kms:ReEncryptFrom
+                  - kms:ReEncryptTo
+                  - kms:RetireGrant
+                  - kms:RevokeGrant
+                  - kms:ScheduleKeyDeletion
+                  - kms:TagResource
+                  - kms:UntagResource
+                  - kms:UpdateKeyDescription
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - elasticmapreduce:AddTags
+                  - elasticmapreduce:CreateSecurityConfiguration
+                  - elasticmapreduce:DeleteSecurityConfiguration
+                  - elasticmapreduce:DescribeSecurityConfiguration
+                  - elasticmapreduce:ListSecurityConfigurations
+                  - elasticmapreduce:RemoveTags
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - glue:CreateCrawler
+                  - glue:CreateDatabase
+                  - glue:CreateJob
+                  - glue:CreateSecurityConfiguration
+                  - glue:DeleteCrawler
+                  - glue:DeleteDatabase
+                  - glue:DeleteJob
+                  - glue:DeleteSecurityConfiguration
+                  - glue:Get*
+                  - glue:PutDataCatalogEncryptionSettings
+                  - glue:SearchTables
+                  - glue:StopCrawler
+                  - glue:TagResource
+                  - glue:UntagResource
+                  - glue:UpdateCrawler
+                  - glue:UpdateDatabase
+                  - glue:UpdateJob
+              - Resource: !Sub arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/*
+                Effect: Allow
+                Action:
+                  - es:AddTags
+                  - es:ListDomainNames
+                  - es:ListTags
+                  - es:RemoveTags
+              - Resource: !Sub arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/sdlf
+                Effect: Allow
+                Action:
+                  - es:CreateElasticsearchDomain
+                  - es:DescribeElasticsearchDomain
+                  - es:DeleteElasticsearchDomain
+                  - es:UpdateElasticsearchDomainConfig
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - cognito-identity:CreateIdentityPool
+                  - cognito-identity:DeleteIdentityPool
+                  - cognito-identity:DescribeIdentityPool
+                  - cognito-identity:GetIdentityPoolRoles
+                  - cognito-identity:UpdateIdentityPool
+                  - cognito-identity:SetIdentityPoolRoles
+                  - cognito-idp:AdminCreateUser
+                  - cognito-idp:AdminDeleteUser
+                  - cognito-idp:CreateGroup
+                  - cognito-idp:CreateResourceServer
+                  - cognito-idp:CreateUserPool
+                  - cognito-idp:CreateUserPoolClient
+                  - cognito-idp:CreateUserPoolDomain
+                  - cognito-idp:DeleteGroup
+                  - cognito-idp:DeleteUserPool
+                  - cognito-idp:DeleteUserPoolClient
+                  - cognito-idp:UpdateGroup
+                  - cognito-idp:UpdateUserPool
+                  - cognito-idp:UpdateUserPoolClient
+
+  rTeamCreationCodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sdlf-cicd-codepipeline
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: sdlf-cicd-codepipeline
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource:
+                  - !Sub arn:aws:s3:::${rArtifactsBucket}
+                  - !Sub arn:aws:s3:::${rArtifactsBucket}/*
+                Effect: Allow
+                Action:
+                  - s3:Get*
+                  - s3:ListBucket*
+                  - s3:Put*
+              - Resource: !GetAtt rKMSKey.Arn
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:Describe*
+                  - kms:Encrypt
+                  - kms:GenerateDataKey*
+                  - kms:List*
+                  - kms:ReEncrypt*
+              - Resource:
+                  - !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/sdlf-*
+                Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+              - Resource:
+                  - !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/sdlf-teams*
+                  - !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/sdlf-foundations*
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:SetStackPolicy
+                  - cloudformation:UpdateStack
+              - Resource: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-components-codecommit
+                Effect: Allow
+                Action: sts:AssumeRole
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt rTeamCreationCloudFormationRole.Arn
+                Condition:
+                  StringEqualsIfExists:
+                    iam:PassedToService:
+                      - cloudformation.amazonaws.com
+
+  rTeamCreationCodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: sdlf-cicd-main
+      RoleArn: !GetAtt rTeamCreationCodePipelineRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: cicd-main
+              RoleArn: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-components-codecommit
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeCommit
+                Version: "1"
+              Namespace: SourceVariables
+              OutputArtifacts:
+                - Name: TemplateSource
+              Configuration:
+                RepositoryName: !Ref pMainRepository
+                BranchName:
+                  !FindInMap [pCodeCommitBranch, !Ref pEnvironment, branch]
+                PollForSourceChanges: false
+              RunOrder: 1
+        - Name: DeployFoundationsInfrastructure
+          Actions:
+            - Name: CreateStack
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              InputArtifacts:
+                - Name: TemplateSource
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn: !GetAtt rTeamCreationCloudFormationRole.Arn
+                StackName: !Sub sdlf-foundations-${pEnvironment}
+                TemplatePath: !Sub "TemplateSource::foundations-${pEnvironment}.yaml"
+                ParameterOverrides: |
+                  {
+                    "pPipelineReference" : "#{codepipeline.PipelineExecutionId}"
+                  }
+                Capabilities: CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND
+              RunOrder: '1'
+        - Name: DeployTeamInfrastructure
+          Actions:
+            - Name: CreateStack
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              InputArtifacts:
+                - Name: TemplateSource
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn: !GetAtt rTeamCreationCloudFormationRole.Arn
+                StackName: !Sub sdlf-teams-${pEnvironment}
+                TemplatePath: !Sub "TemplateSource::teams-${pEnvironment}.yaml"
+                ParameterOverrides: |
+                  {
+                    "pPipelineReference" : "#{codepipeline.PipelineExecutionId}"
+                  }
+                Capabilities: CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND
+              RunOrder: '1'
+      ArtifactStore:
+        Type: S3
+        Location: !Ref rArtifactsBucket
+        EncryptionKey:
+          Id: !GetAtt rKMSKey.Arn
+          Type: KMS
+
+  ######## INFRASTRUCTURE TO BUILD ALL SDLF PRIVATE MODULES #########
+  rBuildCloudformationModuleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: sdlf-cicd-build-cfn-module-codebuild
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:ValidateTemplate
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/sdlf-*
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                Resource:
+                  - !Sub arn:aws:s3:::${rArtifactsBucket}/*
+              - Effect: Allow
+                Action:
+                  - lambda:List*
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - lambda:GetLayer*
+                Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:sdlf-*
+              - Effect: Allow
+                Action:
+                  - kms:CreateGrant
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                  - kms:Encrypt
+                  - kms:GenerateDataKey*
+                  - kms:ReEncrypt*
+                Resource:
+                  - !GetAtt rKMSKey.Arn
+              - Effect: Allow
+                Action:
+                  - iam:ListPolicies
+                Resource:
+                  - "*"
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:GetRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:*
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/CloudFormationManagedUplo-LogAndMetricsDeliveryRol-*"
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DescribeStacks
+                Resource:
+                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/CloudFormationManagedUploadInfrastructure/*"
+              - Effect: Allow
+                Action:
+                  - cloudformation:RegisterType
+                  - cloudformation:SetTypeDefaultVersion
+                Resource:
+                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:type/MODULE/awslabs::sdlf::*"
+                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:type/module/awslabs-sdlf-*"
+              - Effect: Allow
+                Action:
+                  - s3:CreateBucket # necessary for CfnUploadInfra stack
+                  - s3:PutLifecycleConfiguration # necessary for CfnUploadInfra stack
+                  - s3:DeleteBucket
+                  - s3:DeleteBucketPolicy
+                  - s3:GetEncryptionConfiguration
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:ListBuckets
+                  - s3:ListObjectsV2
+                  - s3:PutBucketAcl
+                  - s3:PutBucketLogging
+                  - s3:PutBucketPolicy
+                  - s3:PutBucketVersioning
+                  - s3:PutEncryptionConfiguration
+                  - s3:PutObject # necessary for cfn submit
+                  - s3:SetBucketEncryption
+                Resource:
+                  - arn:aws:s3:::cloudformationmanageduploadinfra-accesslogsbucket-*
+                  - arn:aws:s3:::cloudformationmanageduploadinfrast-artifactbucket-*
+              - Effect: Allow
+                Action: # TODO CreateKey + d'autres trucs
+                  - kms:*
+                Resource:
+                  - "*"
+              - Effect: Allow
+                Action:
+                  - cloudformation:DescribeTypeRegistration
+                Resource:
+                  - "*"
+
+  rBuildCloudformationModuleStage:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: sdlf-cicd-build-cfn-module-codebuild
+      Artifacts:
+        Type: CODEPIPELINE
+      Description: Build a CloudFormation module from Serverless templates
+      EncryptionKey: !GetAtt rKMSKey.Arn
+      Environment:
+        EnvironmentVariables:
+          - Name: ARTIFACTS_BUCKET
+            Type: PLAINTEXT
+            Value: !Ref rArtifactsBucket
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
+        Type: LINUX_CONTAINER
+      QueuedTimeoutInMinutes: 60
+      ServiceRole: !Ref rBuildCloudformationModuleRole
+      Source:
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.9
+              commands:
+                - |-
+                    pip3 uninstall -y aws-sam-cli
+                    curl -L -O https://github.com/aws/aws-sam-cli/releases/latest/download/aws-sam-cli-linux-x86_64.zip \
+                    && unzip -q aws-sam-cli-linux-x86_64.zip -d sam-installation
+                    ./sam-installation/install \
+                    && sam --version
+                - pip3 install cloudformation-cli
+                - aws s3api head-object --bucket sdlf-cfn-artifacts-eu-west-1-469887567303 --key sam-translate.py \
+                  || { curl -L -O https://raw.githubusercontent.com/awslabs/aws-serverless-data-lake-framework/2.0.0/sdlf-cicd/sam-translate.py \
+                       && aws s3api put-object --bucket "$ARTIFACTS_BUCKET" --key sam-translate.py --body sam-translate.py }
+                - aws s3api get-object --bucket "$ARTIFACTS_BUCKET" --key sam-translate.py sam-translate.py
+            build:
+              commands:
+                - sam package --template-file ./"$PATH"template.yaml --s3-bucket "$ARTIFACTS_BUCKET" --s3-prefix sdlf --output-template-file template.yaml
+                - python3 sam-translate.py --template-file=template.yaml --output-template=translated-template.json
+                - # aws cloudformation validate-template --template-body file://./translated-template.json
+                - |-
+                    mkdir module
+                    cd module
+                    cfn init --artifact-type MODULE --type-name "awslabs::sdlf::$MODULE_NAME::MODULE" && rm fragments/sample.json
+                    cp -i -a ../translated-template.json fragments/
+                    cfn submit > cfn.log 2>&1
+                    if grep "Failed.*CloudFormationManagedUploadInfrastructure.*stack" cfn.log; then
+                      aws cloudformation wait stack-create-complete --stack-name "CloudFormationManagedUploadInfrastructure"
+                      cfn submit > cfn.log 2>&1
+                    fi
+                    cat cfn.log
+                    TYPE_VERSION_ARN=$(grep "ProgressStatus.*status COMPLETED" cfn.log | tr "'" '"' | jq -r '.TypeVersionArn')
+                    echo "registering new cloudformation module version as default: $TYPE_VERSION_ARN"
+                    aws cloudformation set-type-default-version --type MODULE --arn "$TYPE_VERSION_ARN" || exit 1
+                    echo "done"
+                    cd ..
+                    rm -Rf module
+          artifacts:
+            files:
+              - "*"
+              - "**/*"
+        Type: CODEPIPELINE
+      TimeoutInMinutes: 5
+
+  ######## SSM OUTPUTS #########
+  rBuildCloudformationModuleStageSsm:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /SDLF/CodeBuild/BuildCloudformationModuleStage
+      Type: String
+      Value: !Ref rBuildCloudformationModuleStage
+      Description: Name of the CodeBuild job that build a CloudFormation module from a SAM template
+
+  rCloudFormationModuleCodePipelineRole:
+    Condition: PrivateSdlfModules
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: F38
+            reason: Condition Applied
+    Properties:
+      RoleName: sdlf-cicd-cfn-mod-codepipeline
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: sdlf-cfn-mod-codepipeline
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: "*"
+                Condition:
+                  StringEqualsIfExists:
+                    iam:PassedToService:
+                      - cloudformation.amazonaws.com
+                      - lambda.amazonaws.com
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/state-machine/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/glue/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/service-role/*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/EMR*
+              - Effect: Allow
+                Action:
+                  - iam:ListRoles
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/*
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/state-machine/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/service-role/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/glue/sdlf-*
+              - Effect: Allow
+                Action:
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/state-machine/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/service-role/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/glue/sdlf-*
+                Condition:
+                  ArnEquals:
+                    iam:PolicyARN:
+                      - !Sub arn:aws:iam::${AWS::AccountId}:policy/sdlf-*
+              - Effect: Allow
+                Action:
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:PutRolePolicy
+                  - iam:UntagRole
+                  - iam:UpdateRole
+                  - iam:UpdateRoleDescription
+                  - iam:TagRole
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/state-machine/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/service-role/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/glue/sdlf-*
+              - Effect: Allow
+                Action:
+                  - iam:ListPolicies
+                  - iam:ListPolicyVersions
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:policy/*
+              - Effect: Allow
+                Action:
+                  - iam:CreatePolicy
+                  - iam:CreatePolicyVersion
+                  - iam:DeletePolicy
+                  - iam:DeletePolicyVersion
+                  - iam:GetPolicy
+                  - iam:GetPolicyVersion
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:policy/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:policy/state-machine/sdlf-*
+              - Effect: Allow
+                Action:
+                  - codecommit:CancelUploadArchive
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:UploadArchive
+                Resource:
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:sdlf-*
+              - Effect: Allow
+                Action:
+                  - events:DeleteRule
+                  - events:DescribeRule
+                  - events:PutRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+                Resource: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/sdlf-*
+              - Effect: Allow
+                Action:
+                  - lambda:GetLayerVersion
+                  - lambda:ListFunctions
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - lambda:AddPermission
+                  - lambda:CreateAlias
+                  - lambda:CreateFunction
+                  - lambda:DeleteFunction
+                  - lambda:DeleteFunctionConcurrency
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:InvokeFunction
+                  - lambda:ListTags
+                  - lambda:PublishVersion
+                  - lambda:PutFunctionConcurrency
+                  - lambda:RemovePermission
+                  - lambda:TagResource
+                  - lambda:UntagResource
+                  - lambda:UpdateAlias
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:UpdateFunctionConfiguration
+                Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:sdlf-*
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:sdlf-foundations-rKibana*
+              - Effect: Allow
+                Action:
+                  - lambda:CreateEventSourceMapping
+                  - lambda:DeleteEventSourceMapping
+                  - lambda:GetEventSourceMapping
+                  - lambda:UpdateEventSourceMapping
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:SetStackPolicy
+                  - cloudformation:UpdateStack
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/sdlf-*
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:aws:transform/*
+              - Effect: Allow
+                Action:
+                  - cloudformation:ValidateTemplate
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:CreateProject
+                  - codebuild:StartBuild
+                  - codebuild:UpdateProject
+                Resource:
+                  - !GetAtt rBuildCloudformationModuleStage.Arn
+                  - !GetAtt rBuildDeployDatalakeLibraryLayer.Arn
+                  - !GetAtt rBuildDeployRequirementsLayer.Arn
+              - Effect: Allow
+                Action:
+                  - states:CreateActivity
+                  - states:CreateStateMachine
+                  - states:ListActivities
+                  - states:ListStateMachines
+                  - states:TagResource
+                Resource: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:*
+              - Effect: Allow
+                Action:
+                  - states:DeleteStateMachine
+                  - states:DescribeStateMachine
+                  - states:DescribeStateMachineForExecution
+                  - states:UpdateStateMachine
+                Resource: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:sdlf-*
+              - Effect: Allow
+                Action:
+                  - states:DescribeActivity
+                  - states:DeleteActivity
+                  - states:GetActivityTask
+                Resource: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:activity:sdlf-*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DescribeLogGroups
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:DeleteLogStream
+                  - logs:DeleteLogGroup
+                  - logs:DescribeLogStreams
+                  - logs:PutLogEvents
+                  - logs:PutRetentionPolicy
+                  - logs:TagLogGroup
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/sdlf-*:log-stream:*
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/sdlf-*:log-stream:*
+              - Effect: Allow
+                Action:
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:PutMetricData
+                  - cloudwatch:SetAlarmState
+                Resource:
+                  - !Sub arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:sdlf-*
+              - Effect: Allow
+                Action:
+                  - sqs:ListQueues
+                Resource: !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:*
+              - Effect: Allow
+                Action:
+                  - sqs:AddPermission
+                  - sqs:ChangeMessageVisibility
+                  - sqs:ChangeMessageVisibilityBatch
+                  - sqs:CreateQueue
+                  - sqs:DeleteQueue
+                  - sqs:GetQueueAttributes
+                  - sqs:SetQueueAttributes
+                  - sqs:TagQueue
+                Resource: !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:sdlf-*
+              - Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:DeleteBucketPolicy
+                  - s3:GetEncryptionConfiguration
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:ListBuckets
+                  - s3:ListObjectsV2
+                  - s3:PutBucketAcl
+                  - s3:PutBucketLogging
+                  - s3:PutBucketPolicy
+                  - s3:PutBucketVersioning
+                  - s3:PutEncryptionConfiguration
+                  - s3:PutObject
+                  - s3:SetBucketEncryption
+                Resource:
+                  - !Sub arn:aws:s3:::${rArtifactsBucket}
+                  - !Sub arn:aws:s3:::${rArtifactsBucket}/*
+              - Effect: Allow
+                Action:
+                  - ssm:AddTagsToResource
+                  - ssm:DescribeParameters
+                  - ssm:GetOpsSummary
+                  - ssm:GetParameter
+                  - ssm:GetParameterHistory
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                  - ssm:ListTagsForResource
+                  - ssm:RemoveTagsFromResource
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/SDLF/*
+              - Effect: Allow
+                Action:
+                  - ssm:DeleteParameter
+                  - ssm:PutParameter
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/SDLF/*
+              - Effect: Allow
+                Action:
+                  - kms:CreateGrant
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                  - kms:Encrypt
+                  - kms:GenerateDataKey*
+                  - kms:ReEncrypt*
+                Resource:
+                  - !GetAtt rKMSKey.Arn
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-components-codecommit
+
+  rEventBridgeRepositoryTriggerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sdlf-cicd-cw-trigger
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: sdlf-cicd-cw-trigger
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: codepipeline:StartPipelineExecution
+                Resource:
+                  - !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rTeamCreationCodePipeline}
+                  - !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:sdlf-cicd-cfn-modules-*
+                  - !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:sdlf-*
+
+  rCicdModulePipeline:
+    Condition: PrivateSdlfModules
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt rCloudFormationModuleCodePipelineRole.Arn
+      Stages:
+        -
+          Name: Source
+          Actions:
+            -
+              Name: Source
+              RoleArn: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-components-codecommit
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: '1'
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                RepositoryName: !Ref pCicdRepository
+                BranchName: !FindInMap [pCodeCommitBranch, !Ref pEnvironment, branch]
+                PollForSourceChanges: false
+              RunOrder: 1
+        -
+          Name: Build
+          Actions:
+            -
+              Name: BuildCicdDatalake
+              InputArtifacts:
+              - Name: SourceArtifact
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !GetAtt rBuildCloudformationModuleStage.Arn
+                EnvironmentVariables: '[{"name":"MODULE_NAME", "value":"cicd", "type":"PLAINTEXT"},{"name":"PATH", "value":"sdlf-cicd-datalake/", "type":"PLAINTEXT"}]'
+              RunOrder: 1
+            -
+              Name: BuildCicdTeam
+              InputArtifacts:
+              - Name: SourceArtifact
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !GetAtt rBuildCloudformationModuleStage.Arn
+                EnvironmentVariables: '[{"name":"MODULE_NAME", "value":"cicdteam", "type":"PLAINTEXT"},{"name":"PATH", "value":"sdlf-cicd-team/", "type":"PLAINTEXT"}]'
+              RunOrder: 2
+      ArtifactStore:
+        Type: S3
+        EncryptionKey:
+          Id: !GetAtt rKMSKey.Arn
+          Type: KMS
+        Location: !Ref rArtifactsBucket
+
+  rCicdModuleTriggerEventRule:
+    Condition: PrivateSdlfModules
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Sub "Run Cicd Module Build on ${pCicdRepository} repository update"
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        resources:
+          - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pCicdRepository}
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - dev
+            - test
+            - master
+      Targets:
+        - Arn: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rCicdModulePipeline}
+          Id: !Sub sdlf-${pCicdRepository}-trigger
+          RoleArn: !GetAtt rEventBridgeRepositoryTriggerRole.Arn
+
+  rFoundationsModulePipeline:
+    Condition: PrivateSdlfModules
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt rCloudFormationModuleCodePipelineRole.Arn
+      Stages:
+        -
+          Name: Source
+          Actions:
+            -
+              Name: Source
+              RoleArn: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-components-codecommit
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: '1'
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                RepositoryName: !Ref pFoundationsRepository
+                BranchName: !FindInMap [pCodeCommitBranch, !Ref pEnvironment, branch]
+                PollForSourceChanges: false
+              RunOrder: 1
+        -
+          Name: Build
+          Actions:
+            -
+              Name: Build
+              InputArtifacts:
+              - Name: SourceArtifact
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              OutputArtifacts:
+                - Name: BuildArtifact
+              Configuration:
+                ProjectName: !GetAtt rBuildCloudformationModuleStage.Arn
+                EnvironmentVariables: '[{"name":"MODULE_NAME", "value":"foundations", "type":"PLAINTEXT"}]'
+              RunOrder: 1
+      ArtifactStore:
+        Type: S3
+        EncryptionKey:
+          Id: !GetAtt rKMSKey.Arn
+          Type: KMS
+        Location: !Ref rArtifactsBucket
+
+  rFoundationsModuleTriggerEventRule:
+    Condition: PrivateSdlfModules
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Sub "Run Foundations Module Build on ${pFoundationsRepository} repository update"
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        resources:
+          - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pFoundationsRepository}
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - dev
+            - test
+            - master
+      Targets:
+        - Arn: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rFoundationsModulePipeline}
+          Id: !Sub sdlf-${pFoundationsRepository}-trigger
+          RoleArn: !GetAtt rEventBridgeRepositoryTriggerRole.Arn
+
+  rTeamModulePipeline:
+    Condition: PrivateSdlfModules
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt rCloudFormationModuleCodePipelineRole.Arn
+      Stages:
+        -
+          Name: Source
+          Actions:
+            -
+              Name: Source
+              RoleArn: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-components-codecommit
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: '1'
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                RepositoryName: !Ref pTeamRepository
+                BranchName: !FindInMap [pCodeCommitBranch, !Ref pEnvironment, branch]
+                PollForSourceChanges: false
+              RunOrder: 1
+        -
+          Name: Build
+          Actions:
+            -
+              Name: Build
+              InputArtifacts:
+              - Name: SourceArtifact
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              OutputArtifacts:
+                - Name: BuildArtifact
+              Configuration:
+                ProjectName: !GetAtt rBuildCloudformationModuleStage.Arn
+                EnvironmentVariables: '[{"name":"MODULE_NAME", "value":"team", "type":"PLAINTEXT"}]'
+              RunOrder: 1
+      ArtifactStore:
+        Type: S3
+        EncryptionKey:
+          Id: !GetAtt rKMSKey.Arn
+          Type: KMS
+        Location: !Ref rArtifactsBucket
+
+  rTeamModuleTriggerEventRule:
+    Condition: PrivateSdlfModules
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Sub "Run Team Module Build on ${pTeamRepository} repository update"
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        resources:
+          - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pTeamRepository}
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - dev
+            - test
+            - master
+      Targets:
+        - Arn: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rTeamModulePipeline}
+          Id: !Sub sdlf-${pTeamRepository}-trigger
+          RoleArn: !GetAtt rEventBridgeRepositoryTriggerRole.Arn
+
+  rPipelineModulePipeline:
+    Condition: PrivateSdlfModules
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt rCloudFormationModuleCodePipelineRole.Arn
+      Stages:
+        -
+          Name: Source
+          Actions:
+            -
+              Name: Source
+              RoleArn: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-components-codecommit
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: '1'
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                RepositoryName: !Ref pPipelineRepository
+                BranchName: !FindInMap [pCodeCommitBranch, !Ref pEnvironment, branch]
+                PollForSourceChanges: false
+              RunOrder: 1
+        -
+          Name: Build
+          Actions:
+            -
+              Name: Build
+              InputArtifacts:
+              - Name: SourceArtifact
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              OutputArtifacts:
+                - Name: BuildArtifact
+              Configuration:
+                ProjectName: !GetAtt rBuildCloudformationModuleStage.Arn
+                EnvironmentVariables: '[{"name":"MODULE_NAME", "value":"pipeline", "type":"PLAINTEXT"}]'
+              RunOrder: 1
+      ArtifactStore:
+        Type: S3
+        EncryptionKey:
+          Id: !GetAtt rKMSKey.Arn
+          Type: KMS
+        Location: !Ref rArtifactsBucket
+
+  rPipelineModuleTriggerEventRule:
+    Condition: PrivateSdlfModules
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Sub "Run Pipeline Module Build on ${pPipelineRepository} repository update"
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        resources:
+          - !Sub arn:aws:codecommit:${AWS::Region}:${pSharedDevOpsAccountId}:${pPipelineRepository}
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - dev
+            - test
+            - master
+      Targets:
+        - Arn: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rPipelineModulePipeline}
+          Id: !Sub sdlf-${pPipelineRepository}-trigger
+          RoleArn: !GetAtt rEventBridgeRepositoryTriggerRole.Arn
+
+  rDatasetModulePipeline:
+    Condition: PrivateSdlfModules
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt rCloudFormationModuleCodePipelineRole.Arn
+      Stages:
+        -
+          Name: Source
+          Actions:
+            -
+              Name: Source
+              RoleArn: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-components-codecommit
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: '1'
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                RepositoryName: !Ref pDatasetRepository
+                BranchName: !FindInMap [pCodeCommitBranch, !Ref pEnvironment, branch]
+                PollForSourceChanges: false
+              RunOrder: 1
+        -
+          Name: Build
+          Actions:
+            -
+              Name: Build
+              InputArtifacts:
+              - Name: SourceArtifact
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              OutputArtifacts:
+                - Name: BuildArtifact
+              Configuration:
+                ProjectName: !GetAtt rBuildCloudformationModuleStage.Arn
+                EnvironmentVariables: '[{"name":"MODULE_NAME", "value":"dataset", "type":"PLAINTEXT"}]'
+              RunOrder: 1
+      ArtifactStore:
+        Type: S3
+        EncryptionKey:
+          Id: !GetAtt rKMSKey.Arn
+          Type: KMS
+        Location: !Ref rArtifactsBucket
+
+  rDatasetModuleTriggerEventRule:
+    Condition: PrivateSdlfModules
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Sub "Run Dataset Module Build on ${pDatasetRepository} repository update"
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        resources:
+          - !Sub arn:aws:codecommit:${AWS::Region}:${pSharedDevOpsAccountId}:${pDatasetRepository}
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - dev
+            - test
+            - master
+      Targets:
+        - Arn: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rDatasetModulePipeline}
+          Id: !Sub sdlf-${pDatasetRepository}-trigger
+          RoleArn: !GetAtt rEventBridgeRepositoryTriggerRole.Arn
+
+  rStageAModulePipeline:
+    Condition: PrivateSdlfModules
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt rCloudFormationModuleCodePipelineRole.Arn
+      Stages:
+        -
+          Name: Source
+          Actions:
+            -
+              Name: Source
+              RoleArn: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-components-codecommit
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: '1'
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                RepositoryName: !Ref pStageARepository
+                BranchName: !FindInMap [pCodeCommitBranch, !Ref pEnvironment, branch]
+                PollForSourceChanges: false
+              RunOrder: 1
+        -
+          Name: Build
+          Actions:
+            -
+              Name: Build
+              InputArtifacts:
+              - Name: SourceArtifact
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              OutputArtifacts:
+                - Name: BuildArtifact
+              Configuration:
+                ProjectName: !GetAtt rBuildCloudformationModuleStage.Arn
+                EnvironmentVariables: '[{"name":"MODULE_NAME", "value":"stageA", "type":"PLAINTEXT"}]'
+              RunOrder: 1
+      ArtifactStore:
+        Type: S3
+        EncryptionKey:
+          Id: !GetAtt rKMSKey.Arn
+          Type: KMS
+        Location: !Ref rArtifactsBucket
+
+  rStageAModuleTriggerEventRule:
+    Condition: PrivateSdlfModules
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Sub "Run StageA Module Build on ${pStageARepository} repository update"
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        resources:
+          - !Sub arn:aws:codecommit:${AWS::Region}:${pSharedDevOpsAccountId}:${pStageARepository}
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - dev
+            - test
+            - master
+      Targets:
+        - Arn: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rStageAModulePipeline}
+          Id: !Sub sdlf-${pStageARepository}-trigger
+          RoleArn: !GetAtt rEventBridgeRepositoryTriggerRole.Arn
+
+  rStageBModulePipeline:
+    Condition: PrivateSdlfModules
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt rCloudFormationModuleCodePipelineRole.Arn
+      Stages:
+        -
+          Name: Source
+          Actions:
+            -
+              Name: Source
+              RoleArn: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-components-codecommit
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: '1'
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                RepositoryName: !Ref pStageBRepository
+                BranchName: !FindInMap [pCodeCommitBranch, !Ref pEnvironment, branch]
+                PollForSourceChanges: false
+              RunOrder: 1
+        -
+          Name: Build
+          Actions:
+            -
+              Name: Build
+              InputArtifacts:
+              - Name: SourceArtifact
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              OutputArtifacts:
+                - Name: BuildArtifact
+              Configuration:
+                ProjectName: !GetAtt rBuildCloudformationModuleStage.Arn
+                EnvironmentVariables: '[{"name":"MODULE_NAME", "value":"stageB", "type":"PLAINTEXT"}]'
+              RunOrder: 1
+      ArtifactStore:
+        Type: S3
+        EncryptionKey:
+          Id: !GetAtt rKMSKey.Arn
+          Type: KMS
+        Location: !Ref rArtifactsBucket
+
+  rStageBModuleTriggerEventRule:
+    Condition: PrivateSdlfModules
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Sub "Run StageB Module Build on ${pStageBRepository} repository update"
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        resources:
+          - !Sub arn:aws:codecommit:${AWS::Region}:${pSharedDevOpsAccountId}:${pStageBRepository}
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - dev
+            - test
+            - master
+      Targets:
+        - Arn: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rStageBModulePipeline}
+          Id: !Sub sdlf-${pStageBRepository}-trigger
+          RoleArn: !GetAtt rEventBridgeRepositoryTriggerRole.Arn
+
+  rStageCicdModulePipeline:
+    Condition: PrivateSdlfModules
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt rCloudFormationModuleCodePipelineRole.Arn
+      Stages:
+        -
+          Name: Source
+          Actions:
+            -
+              Name: Source
+              RoleArn: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-components-codecommit
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: '1'
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                RepositoryName: !Ref pCicdRepository
+                BranchName: !FindInMap [pCodeCommitBranch, !Ref pEnvironment, branch]
+                PollForSourceChanges: false
+              RunOrder: 1
+        -
+          Name: Build
+          Actions:
+            -
+              Name: Build
+              InputArtifacts:
+              - Name: SourceArtifact
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              OutputArtifacts:
+                - Name: BuildArtifact
+              Configuration:
+                ProjectName: !GetAtt rBuildCloudformationModuleStage.Arn
+                EnvironmentVariables: '[{"name":"MODULE_NAME", "value":"stagecicd", "type":"PLAINTEXT"}]'
+              RunOrder: 1
+      ArtifactStore:
+        Type: S3
+        EncryptionKey:
+          Id: !GetAtt rKMSKey.Arn
+          Type: KMS
+        Location: !Ref rArtifactsBucket
+
+  rStageCicdModuleTriggerEventRule:
+    Condition: PrivateSdlfModules
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Sub "Run Stage CICD Module Build on ${pCicdRepository} repository update"
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        resources:
+          - !Sub arn:aws:codecommit:${AWS::Region}:${pSharedDevOpsAccountId}:${pCicdRepository}
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - dev
+            - test
+            - master
+      Targets:
+        - Arn: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rStageCicdModulePipeline}
+          Id: !Sub sdlf-${pCicdRepository}-trigger
+          RoleArn: !GetAtt rEventBridgeRepositoryTriggerRole.Arn
+
+  ######## LAMBDA LAYERS ########
+  rLambdaLayerCodePipelineRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: F38
+            reason: Condition Applied
+    Properties:
+      RoleName: sdlf-cicd-lambda-layer-codepipeline
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: sdlf-lambda-layer-codepipeline
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: "*"
+                Condition:
+                  StringEqualsIfExists:
+                    iam:PassedToService:
+                      - cloudformation.amazonaws.com
+                      - lambda.amazonaws.com
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/state-machine/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/glue/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/service-role/*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/EMR*
+              - Effect: Allow
+                Action:
+                  - iam:ListRoles
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/*
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/state-machine/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/service-role/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/glue/sdlf-*
+              - Effect: Allow
+                Action:
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/state-machine/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/service-role/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/glue/sdlf-*
+                Condition:
+                  ArnEquals:
+                    iam:PolicyARN:
+                      - !Sub arn:aws:iam::${AWS::AccountId}:policy/sdlf-*
+              - Effect: Allow
+                Action:
+                  - iam:DeleteRole
+                  - iam:DeleteRolePolicy
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:PutRolePolicy
+                  - iam:UntagRole
+                  - iam:UpdateRole
+                  - iam:UpdateRoleDescription
+                  - iam:TagRole
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/state-machine/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/service-role/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/glue/sdlf-*
+              - Effect: Allow
+                Action:
+                  - iam:ListPolicies
+                  - iam:ListPolicyVersions
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:policy/*
+              - Effect: Allow
+                Action:
+                  - iam:CreatePolicy
+                  - iam:CreatePolicyVersion
+                  - iam:DeletePolicy
+                  - iam:DeletePolicyVersion
+                  - iam:GetPolicy
+                  - iam:GetPolicyVersion
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:policy/sdlf-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:policy/state-machine/sdlf-*
+              - Effect: Allow
+                Action:
+                  - codecommit:CancelUploadArchive
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:UploadArchive
+                Resource:
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:sdlf-*
+              - Effect: Allow
+                Action:
+                  - events:DeleteRule
+                  - events:DescribeRule
+                  - events:PutRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+                Resource: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/sdlf-*
+              - Effect: Allow
+                Action:
+                  - lambda:GetLayerVersion
+                  - lambda:ListFunctions
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - lambda:AddPermission
+                  - lambda:CreateAlias
+                  - lambda:CreateFunction
+                  - lambda:DeleteFunction
+                  - lambda:DeleteFunctionConcurrency
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:InvokeFunction
+                  - lambda:ListTags
+                  - lambda:PublishVersion
+                  - lambda:PutFunctionConcurrency
+                  - lambda:RemovePermission
+                  - lambda:TagResource
+                  - lambda:UntagResource
+                  - lambda:UpdateAlias
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:UpdateFunctionConfiguration
+                Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:sdlf-*
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:sdlf-foundations-rKibana*
+              - Effect: Allow
+                Action:
+                  - lambda:CreateEventSourceMapping
+                  - lambda:DeleteEventSourceMapping
+                  - lambda:GetEventSourceMapping
+                  - lambda:UpdateEventSourceMapping
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:SetStackPolicy
+                  - cloudformation:UpdateStack
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/sdlf-*
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:aws:transform/*
+              - Effect: Allow
+                Action:
+                  - cloudformation:ValidateTemplate
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:CreateProject
+                  - codebuild:StartBuild
+                  - codebuild:UpdateProject
+                Resource:
+                  - !GetAtt rBuildCloudformationModuleStage.Arn
+                  - !GetAtt rBuildDeployDatalakeLibraryLayer.Arn
+                  - !GetAtt rBuildDeployRequirementsLayer.Arn
+              - Effect: Allow
+                Action:
+                  - states:CreateActivity
+                  - states:CreateStateMachine
+                  - states:ListActivities
+                  - states:ListStateMachines
+                  - states:TagResource
+                Resource: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:*
+              - Effect: Allow
+                Action:
+                  - states:DeleteStateMachine
+                  - states:DescribeStateMachine
+                  - states:DescribeStateMachineForExecution
+                  - states:UpdateStateMachine
+                Resource: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:sdlf-*
+              - Effect: Allow
+                Action:
+                  - states:DescribeActivity
+                  - states:DeleteActivity
+                  - states:GetActivityTask
+                Resource: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:activity:sdlf-*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DescribeLogGroups
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:DeleteLogStream
+                  - logs:DeleteLogGroup
+                  - logs:DescribeLogStreams
+                  - logs:PutLogEvents
+                  - logs:PutRetentionPolicy
+                  - logs:TagLogGroup
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/sdlf-*:log-stream:*
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/sdlf-*:log-stream:*
+              - Effect: Allow
+                Action:
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:PutMetricData
+                  - cloudwatch:SetAlarmState
+                Resource:
+                  - !Sub arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:sdlf-*
+              - Effect: Allow
+                Action:
+                  - sqs:ListQueues
+                Resource: !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:*
+              - Effect: Allow
+                Action:
+                  - sqs:AddPermission
+                  - sqs:ChangeMessageVisibility
+                  - sqs:ChangeMessageVisibilityBatch
+                  - sqs:CreateQueue
+                  - sqs:DeleteQueue
+                  - sqs:GetQueueAttributes
+                  - sqs:SetQueueAttributes
+                  - sqs:TagQueue
+                Resource: !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:sdlf-*
+              - Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:DeleteBucketPolicy
+                  - s3:GetEncryptionConfiguration
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:ListBuckets
+                  - s3:ListObjectsV2
+                  - s3:PutBucketAcl
+                  - s3:PutBucketLogging
+                  - s3:PutBucketPolicy
+                  - s3:PutBucketVersioning
+                  - s3:PutEncryptionConfiguration
+                  - s3:PutObject
+                  - s3:SetBucketEncryption
+                Resource:
+                  - !Sub arn:aws:s3:::${rArtifactsBucket}
+                  - !Sub arn:aws:s3:::${rArtifactsBucket}/*
+              - Effect: Allow
+                Action:
+                  - ssm:AddTagsToResource
+                  - ssm:DescribeParameters
+                  - ssm:GetOpsSummary
+                  - ssm:GetParameter
+                  - ssm:GetParameterHistory
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                  - ssm:ListTagsForResource
+                  - ssm:RemoveTagsFromResource
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/SDLF/*
+              - Effect: Allow
+                Action:
+                  - ssm:DeleteParameter
+                  - ssm:PutParameter
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/SDLF/*
+              - Effect: Allow
+                Action:
+                  - kms:CreateGrant
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                  - kms:Encrypt
+                  - kms:GenerateDataKey*
+                  - kms:ReEncrypt*
+                Resource:
+                  - !GetAtt rKMSKey.Arn
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-components-codecommit
+
+  rCodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sdlf-codebuild
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: sdlf-codebuild
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/sdlf-*
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                Resource:
+                  - !Sub arn:aws:s3:::${rArtifactsBucket}/*
+              - Effect: Allow
+                Action: codecommit:GitPull
+                Resource:
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:sdlf-*
+              - Effect: Allow
+                Action:
+                  - kms:CreateGrant
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                  - kms:Encrypt
+                  - kms:GenerateDataKey*
+                  - kms:ReEncrypt*
+                Resource:
+                  - !GetAtt rKMSKey.Arn
+
+  rCodeBuildPublishLayerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sdlf-codebuild-publish-layer
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !GetAtt rCodeBuildServiceRole.Arn
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: sdlf-codebuild-publish-layer
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:PublishLayerVersion
+                Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:sdlf-*
+              - Effect: Allow
+                Action:
+                  - dynamodb:Get*
+                  - dynamodb:Update*
+                  - dynamodb:Put*
+                Resource:
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/octagon-*
+              - Effect: Allow
+                Action:
+                  - ssm:AddTagsToResource
+                  - ssm:DescribeParameters
+                  - ssm:GetOpsSummary
+                  - ssm:GetParameter
+                  - ssm:GetParameterHistory
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                  - ssm:ListTagsForResource
+                  - ssm:RemoveTagsFromResource
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/SDLF/*
+              - Effect: Allow
+                Action:
+                  - ssm:PutParameter
+                  - ssm:DeleteParameter
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/SDLF/Lambda/*
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+                  - s3:GetBucketVersioning
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:ListBucket
+                  - s3:PutObject
+                Resource:
+                  - !Sub arn:aws:s3:::${rArtifactsBucket}
+                  - !Sub arn:aws:s3:::${rArtifactsBucket}/*
+
+  rBuildDeployDatalakeLibraryLayer:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub sdlf-${pDatalakeLibsLambdaLayerName}
+      Artifacts:
+        Type: CODEPIPELINE
+      Description: Creates a Lambda Layer with the repository provided
+      EncryptionKey: !GetAtt rKMSKey.Arn
+      Environment:
+        EnvironmentVariables:
+          - Name: LAYER_NAME
+            Type: PLAINTEXT
+            Value: !Ref pDatalakeLibsLambdaLayerName
+          - Name: LAMBDA_PUBLISHING_ROLE
+            Type: PLAINTEXT
+            Value: !GetAtt rCodeBuildPublishLayerRole.Arn
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
+        Type: LINUX_CONTAINER
+      QueuedTimeoutInMinutes: 60
+      ServiceRole: !GetAtt rCodeBuildServiceRole.Arn
+      Source:
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.9
+            build:
+              commands:
+                - ls && echo "-----> making artifactory directory"
+                - mkdir artifacts
+                - zip -r artifacts/datalake_library.zip ./python -x \*__pycache__\*
+                - account_id=$(aws sts get-caller-identity | jq .Account)
+                - temp_role=$(aws sts assume-role --role-arn $LAMBDA_PUBLISHING_ROLE --role-session-name "codebuild-lambda-layer")
+                - export AWS_ACCESS_KEY_ID=$(echo $temp_role | jq .Credentials.AccessKeyId | xargs)
+                - export AWS_SECRET_ACCESS_KEY=$(echo $temp_role | jq .Credentials.SecretAccessKey | xargs)
+                - export AWS_SESSION_TOKEN=$(echo $temp_role | jq .Credentials.SessionToken | xargs)
+                - layer=$(aws lambda publish-layer-version --layer-name sdlf-$LAYER_NAME --description "Contains the latest version of datalake_library" --compatible-runtimes "python3.9" --zip-file fileb://./artifacts/datalake_library.zip)
+                - latest_layer_version=$(echo $layer | jq -r .LayerVersionArn)
+                - aws ssm put-parameter --name "/SDLF/Lambda/LatestDatalakeLibraryLayer" --value $latest_layer_version --type String --overwrite
+        Type: CODEPIPELINE
+      TimeoutInMinutes: 20
+
+  rBuildDeployRequirementsLayer:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Name: !Sub sdlf-${pDefaultPipLibrariesLambdaLayerName}
+      Description: Creates a Lambda Layer containing the libraries and version numbers listed in the requirements.txt file in the repository provided
+      EncryptionKey: !GetAtt rKMSKey.Arn
+      Environment:
+        EnvironmentVariables:
+          - Name: LAYER_NAME
+            Type: PLAINTEXT
+            Value: !Ref pDefaultPipLibrariesLambdaLayerName
+          - Name: LAMBDA_PUBLISHING_ROLE
+            Type: PLAINTEXT
+            Value: !GetAtt rCodeBuildPublishLayerRole.Arn
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
+        Type: LINUX_CONTAINER
+      QueuedTimeoutInMinutes: 60
+      ServiceRole: !GetAtt rCodeBuildServiceRole.Arn
+      Source:
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                  python: 3.9
+              commands:
+                - pip3 install boto3
+            build:
+              commands:
+                - temp_role=$(aws sts assume-role --role-arn $LAMBDA_PUBLISHING_ROLE --role-session-name "codebuild-lambda-layer")
+                - export AWS_ACCESS_KEY_ID=$(echo $temp_role | jq .Credentials.AccessKeyId | xargs)
+                - export AWS_SECRET_ACCESS_KEY=$(echo $temp_role | jq .Credentials.SecretAccessKey | xargs)
+                - export AWS_SESSION_TOKEN=$(echo $temp_role | jq .Credentials.SessionToken | xargs)
+                - echo ">>>>> Beginning build of subdirectories >>>>>"
+                - bash build.sh
+                - echo ">>>>> Beginning build of default layer >>>>>"
+                - ls && echo "-----> making temporary directory"
+                - mkdir -p layer/python
+                - pip3 -q install -r ./requirements.txt -t layer/python
+                - cd layer/
+                - zip -r layer.zip python/ -x \*__pycache__\*
+                - echo "Uploading default Lambda Layer..."
+                - layer=$(aws lambda publish-layer-version --layer-name sdlf-$LAYER_NAME --description "Contains a default Pip library layer" --compatible-runtimes "python3.9" --zip-file fileb://./layer.zip)
+                - latest_layer_version=$(echo $layer | jq -r .LayerVersionArn)
+                - aws ssm put-parameter --name "/SDLF/Lambda/LatestDefaultPipLibraryLayer" --value $latest_layer_version --type String --overwrite
+        Type: CODEPIPELINE
+      TimeoutInMinutes: 20
+
+  rCommonPipLibs:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn: rDatalakePipelineTriggerRule
+    Properties:
+      Name: !Sub sdlf-${pDefaultPipLibrariesLambdaLayerName}
+      RoleArn: !GetAtt rLambdaLayerCodePipelineRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              RoleArn: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-components-codecommit
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: "1"
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                RepositoryName: !Ref pPipLibrariesRepositoryName
+                BranchName: !Ref pLibrariesBranchName
+                PollForSourceChanges: false
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              InputArtifacts:
+                - Name: SourceArtifact
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref rBuildDeployRequirementsLayer
+              RunOrder: 1
+      ArtifactStore:
+        Type: S3
+        EncryptionKey:
+          Id: !GetAtt rKMSKey.Arn
+          Type: KMS
+        Location: !Ref rArtifactsBucket
+
+  rDatalakePipelineTriggerRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub sdlf-${pDatalakeLibsLambdaLayerName}-trigger
+      Description: "Trigger team Data Lake Library pipeline"
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        resources:
+          - !Sub arn:aws:codecommit:${AWS::Region}:${pSharedDevOpsAccountId}:${pDatalakeLibraryRepositoryName}
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - !Ref pLibrariesBranchName
+      Targets:
+        - Arn:
+            !If [
+              NotRunUnitTestingStage,
+              !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rCommonDatalakeLibs}",
+              !Sub "arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rCommonDatalakeTestLibs}",
+            ]
+          Id: !Sub sdlf-${pDatalakeLibsLambdaLayerName}-trigger
+          RoleArn: !GetAtt rEventBridgeRepositoryTriggerRole.Arn
+
+  # rDatalakePipelineFailedRule:
+  #   Type: AWS::Events::Rule
+  #   Properties:
+  #     Name: !Sub sdlf-${pDatalakeLibsLambdaLayerName}-failure
+  #     Description: "Notify team of Data Lake Library pipeline failure"
+  #     EventPattern:
+  #       source:
+  #         - aws.codepipeline
+  #       detail-type:
+  #         - CodePipeline Pipeline Execution State Change
+  #       detail:
+  #         state:
+  #           - FAILED
+  #         pipeline:
+  #           - !If [
+  #               NotRunUnitTestingStage,
+  #               !Ref rCommonDatalakeLibs,
+  #               !Ref rCommonDatalakeTestLibs,
+  #             ]
+  #     State: ENABLED
+  #     Targets:
+  #       - Arn: !Ref rSNSTopic
+  #         Id: !Sub sdlf-${pDatalakeLibsLambdaLayerName}-failure
+  #         InputTransformer:
+  #           InputTemplate:
+  #             !If [
+  #               NotRunUnitTestingStage,
+  #               !Sub '"The Pipeline <pipeline> has failed. Go to https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${rCommonDatalakeLibs}"',
+  #               !Sub '"The Pipeline <pipeline> has failed. Go to https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${rCommonDatalakeTestLibs}"',
+  #             ]
+  #           InputPathsMap:
+  #             pipeline: $.detail.pipeline
+
+  rPipPipelineTriggerRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub sdlf-${pDefaultPipLibrariesLambdaLayerName}-trigger
+      Description: "Trigger team Pip Library pipeline"
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        resources:
+          - !Sub arn:aws:codecommit:${AWS::Region}:${pSharedDevOpsAccountId}:${pPipLibrariesRepositoryName}
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - !Ref pLibrariesBranchName
+      Targets:
+        - Arn: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${rCommonPipLibs}
+          Id: !Sub sdlf-${pDefaultPipLibrariesLambdaLayerName}-trigger
+          RoleArn: !GetAtt rEventBridgeRepositoryTriggerRole.Arn
+
+  # rPipPipelineFailedRule:
+  #   Type: AWS::Events::Rule
+  #   Properties:
+  #     Name: !Sub sdlf-${pDefaultPipLibrariesLambdaLayerName}-failure
+  #     Description: "Notify admin team of Pip Library pipeline failure"
+  #     EventPattern:
+  #       source:
+  #         - aws.codepipeline
+  #       detail-type:
+  #         - CodePipeline Pipeline Execution State Change
+  #       detail:
+  #         state:
+  #           - FAILED
+  #         pipeline:
+  #           - !Ref rCommonPipLibs
+  #     State: ENABLED
+  #     Targets:
+  #       - Arn: !Ref rSNSTopic
+  #         Id: !Sub sdlf-${pDefaultPipLibrariesLambdaLayerName}-failure
+  #         InputTransformer:
+  #           InputTemplate: !Sub '"The Pipeline <pipeline> has failed. Go to https://console.aws.amazon.com/codepipeline/home?region=${AWS::Region}#/view/${rCommonPipLibs}"'
+  #           InputPathsMap:
+  #             pipeline: $.detail.pipeline
+
+  ######## LAMBDA LAYERS PIPELINES #########
+  rCommonDatalakeLibs:
+    Type: AWS::CodePipeline::Pipeline
+    Condition: NotRunUnitTestingStage
+    Properties:
+      Name: !Sub sdlf-${pDatalakeLibsLambdaLayerName}
+      RoleArn: !GetAtt rLambdaLayerCodePipelineRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              RoleArn: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-components-codecommit
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: "1"
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                RepositoryName: !Ref pDatalakeLibraryRepositoryName
+                BranchName: !Ref pLibrariesBranchName
+                PollForSourceChanges: false
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              InputArtifacts:
+                - Name: SourceArtifact
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref rBuildDeployDatalakeLibraryLayer
+              RunOrder: 1
+      ArtifactStore:
+        Type: S3
+        EncryptionKey:
+          Id: !GetAtt rKMSKey.Arn
+          Type: KMS
+        Location: !Ref rArtifactsBucket
+
+  rCommonDatalakeTestLibs:
+    Type: AWS::CodePipeline::Pipeline
+    Condition: RunUnitTestingStage
+    Properties:
+      Name: !Sub sdlf-${pDatalakeLibsLambdaLayerName}-test
+      RoleArn: !GetAtt rLambdaLayerCodePipelineRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              RoleArn: !Sub arn:aws:iam::${pSharedDevOpsAccountId}:role/sdlf-cicd-components-codecommit
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: "1"
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                RepositoryName: !Ref pDatalakeLibraryRepositoryName
+                BranchName: !Ref pLibrariesBranchName
+                PollForSourceChanges: false
+              RunOrder: 1
+        - Name: Test
+          Actions:
+            - Name: Test
+              InputArtifacts:
+                - Name: SourceArtifact
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref rTeamUnitTestCodeBuildProject
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              InputArtifacts:
+                - Name: SourceArtifact
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref rBuildDeployDatalakeLibraryLayer
+              RunOrder: 1
+      ArtifactStore:
+        Type: S3
+        EncryptionKey:
+          Id: !GetAtt rKMSKey.Arn
+          Type: KMS
+        Location: !Ref rArtifactsBucket
+
+  ######## CODEBUILD JOBS #########
+  rTeamUnitTestCodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Condition: RunUnitTestingStage
+    Properties:
+      Name: sdlf-cicd-unit-test-coverage
+      Artifacts:
+        Type: CODEPIPELINE
+      EncryptionKey: !GetAtt rKMSKey.Arn
+      Environment:
+        EnvironmentVariables:
+          - Name: COV_PERCENT
+            Type: PLAINTEXT
+            Value: !Ref pMinTestCoverage
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
+        Type: LINUX_CONTAINER
+      ServiceRole: !GetAtt rCodeBuildServiceRole.Arn
+      TimeoutInMinutes: 20
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                  python: 3.9
+            build:
+              commands:
+                - DIR=$CODEBUILD_SRC_DIR/python/datalake_library
+                - min_coverage=$COV_PERCENT
+                - pip install -r $DIR/requirements.txt
+                - |-
+                    for filename in $(find "$DIR" -name 'test*.py');
+                      do
+                          [ -e "$filename" ] || continue;
+                          pname=$(dirname "$filename");
+                          fbname=$(basename "$filename");
+                          if [ -f $pname/requirements.txt ]; then
+                              echo "Installing package specific dependencies...";
+                              pip install -r $pname/requirements.txt;
+                          fi
+                          cov_output="$pname/coverage_report.txt";
+                          code=$(echo $fbname | cut -d _ -f 2-);
+                          package=$(find $DIR -name $code | xargs dirname);
+                          python3 -m pytest "$filename" --cov-report term --cov=$package --cov-fail-under $min_coverage -x
+                      done
+          artifacts:
+            files:
+              - "*"
+              - "**/*"
+
+  ######## SSM OUTPUTS #########
+  rCFNBucketSsm:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /SDLF/S3/CFNBucket
+      Type: String
+      Value: !Ref rArtifactsBucket
+      Description: S3 CFN Artifacts Bucket
+  rEventBridgeRepositoryTriggerRoleSsm:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /SDLF/IAM/EventBridgeRepositoryTriggerRoleArn
+      Type: String
+      Value: !GetAtt rEventBridgeRepositoryTriggerRole.Arn
+      Description: Role for EventBridge Repository Change Trigger
+  rLambdaLayerCodePipelineRoleSsm:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /SDLF/CodeBuild/CodePipelineRole
+      Type: String
+      Value: !GetAtt rLambdaLayerCodePipelineRole.Arn
+      Description: Code Pipeline role ARN
+  rCloudFormationModuleCodePipelineRoleSsm: # TODO
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /SDLF/CodeBuild/CfnModCodePipelineRole
+      Type: String
+      Value: !GetAtt rCloudFormationModuleCodePipelineRole.Arn
+      Description: Code Pipeline role ARN
+  rEnvironmentSsm:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /SDLF/Misc/pEnv
+      Type: String
+      Value: !Ref pEnvironment
+      Description: Environment name
+  rSharedDevOpsAccountIdSsm:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /SDLF/Misc/DevOpsAccountId
+      Type: String
+      Value: !Ref pSharedDevOpsAccountId
+      Description: Shared DevOps Account Id
+  rDatalakeLibraryLayerSsm:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /SDLF/Lambda/LatestDatalakeLibraryLayer
+      Type: String
+      Value: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:${pDatalakeLibsLambdaLayerName}:1
+      Description: The ARN of the latest version of the Datalake Library layer
+  rPipLibrariesLayerSsm:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /SDLF/Lambda/LatestDefaultPipLibraryLayer
+      Type: String
+      Value: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:${pDefaultPipLibrariesLambdaLayerName}:1
+      Description: The ARN of the latest version of the Lambda Layer containing the Pip libraries
+  rBuildDeployDatalakeLibraryLayerSsm:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /SDLF/CodeBuild/BuildDeployDatalakeLibraryLayer
+      Type: String
+      Value: !Ref rBuildDeployDatalakeLibraryLayer
+      Description: Name of the CodeBuild job that packages the Datalake Libs into a Lambda Layer
+
+Outputs:
+  oPipelineReference:
+    Description: CodePipeline reference this stack has been deployed with
+    Value: !Ref pPipelineReference

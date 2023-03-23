@@ -1,46 +1,14 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: CICD pipelines to automate SDLF workflows
+Description: CodeBuild project to build CloudFormation modules
 
 Parameters:
   pArtifactsBucket:
     Description: The artifactory bucket used by CodeBuild and CodePipeline
     Type: AWS::SSM::Parameter::Value<String>
-    Default: /SDLF/S3/CFNBucket
-  pSharedDevOpsAccountId:
-    Type: AWS::SSM::Parameter::Value<String>
-    Default: /SDLF/Misc/DevOpsAccountId
-
-  pEnvironment:
-    Type: AWS::SSM::Parameter::Value<String>
-    Default: /SDLF/Misc/pEnv
-  pTeamRepository:
+    Default: /SDLF/S3/DevOpsArtifactsBucket
+  pCicdRepository:
     Type: String
-    Default: sdlf-team
-  pPipelineRepository:
-    Type: String
-    Default: sdlf-pipeline
-  pDatasetRepository:
-    Type: String
-    Default: sdlf-dataset
-  pSharedDevOpsAccountKmsKeyArn:
-    Description: Arn of the KMS key in the Shared DevOps account
-    Type: String
-  pEventBridgeRepositoryTriggerRoleArn:
-    Type: AWS::SSM::Parameter::Value<String>
-    Default: /SDLF/IAM/EventBridgeRepositoryTriggerRoleArn
-
-Mappings:
-  pCodeCommitBranch:
-    dev:
-      branch: dev
-    test:
-      branch: test
-    prod:
-      branch: master
-
-Conditions:
-  CrossAccount:
-    !Not [!Equals [!Ref pSharedDevOpsAccountId, !Ref "AWS::AccountId"]]
+    Default: sdlf-cicd
 
 Resources:
   rBuildCloudformationModuleRole:
@@ -79,24 +47,6 @@ Resources:
                   - s3:PutObject
                 Resource:
                   - !Sub arn:aws:s3:::${pArtifactsBucket}/*
-              - Effect: Allow
-                Action:
-                  - lambda:List*
-                Resource: "*"
-              - Effect: Allow
-                Action:
-                  - lambda:GetLayer*
-                Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:sdlf-*
-              - Effect: Allow
-                Action:
-                  - kms:CreateGrant
-                  - kms:Decrypt
-                  - kms:DescribeKey
-                  - kms:Encrypt
-                  - kms:GenerateDataKey*
-                  - kms:ReEncrypt*
-                Resource:
-                  - !Ref pSharedDevOpsAccountKmsKeyArn
               - Effect: Allow
                 Action:
                   - iam:ListPolicies
@@ -155,26 +105,35 @@ Resources:
                   - cloudformation:DescribeTypeRegistration
                 Resource:
                   - "*"
+              - Effect: Allow
+                Action:
+                  - codecommit:*
+                Resource:
+                  - !Sub "arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pCicdRepository}"
 
   rBuildCloudformationModuleStage:
     Type: AWS::CodeBuild::Project
     Properties:
-      Name: !Sub sdlf-cicd-build-cfn-module-codebuild
-      Artifacts:
-        Type: CODEPIPELINE
+      Name: sdlf-cicd-bootstrap-codebuild
       Description: Build a CloudFormation module from Serverless templates
-      EncryptionKey: !Ref pSharedDevOpsAccountKmsKeyArn
+      Artifacts:
+        Type: NO_ARTIFACTS
       Environment:
         EnvironmentVariables:
           - Name: ARTIFACTS_BUCKET
             Type: PLAINTEXT
             Value: !Ref pArtifactsBucket
+          - Name: MODULE_NAME
+            Type: PLAINTEXT
+            Value: "sdlfcicddatalake"
         ComputeType: BUILD_GENERAL1_SMALL
         Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
         Type: LINUX_CONTAINER
       QueuedTimeoutInMinutes: 60
       ServiceRole: !Ref rBuildCloudformationModuleRole
       Source:
+        Type: CODECOMMIT
+        Location: !Sub "https://git-codecommit.${AWS::Region}.amazonaws.com/v1/repos/${pCicdRepository}"
         BuildSpec: |
           version: 0.2
           phases:
@@ -192,7 +151,7 @@ Resources:
                 - aws s3api get-object --bucket "$ARTIFACTS_BUCKET" --key sam-translate.py sam-translate.py
             build:
               commands:
-                - sam package --template-file ./template.yaml --s3-bucket "$ARTIFACTS_BUCKET" --s3-prefix sdlf --output-template-file template.yaml
+                - sam package --template-file ./sdlf-cicd-datalake/template.yaml --s3-bucket "$ARTIFACTS_BUCKET" --s3-prefix sdlf --output-template-file template.yaml
                 - python3 sam-translate.py --template-file=template.yaml --output-template=translated-template.json
                 - # aws cloudformation validate-template --template-body file://./translated-template.json
                 - |-
@@ -216,19 +175,5 @@ Resources:
             files:
               - "*"
               - "**/*"
-        Type: CODEPIPELINE
+      SourceVersion: refs/heads/master
       TimeoutInMinutes: 5
-
-  ######## SSM OUTPUTS #########
-  rBuildCloudformationModuleStageSsm:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: !Sub /SDLF/CodeBuild/BuildCloudformationModuleStage
-      Type: String
-      Value: !Ref rBuildCloudformationModuleStage
-      Description: Name of the CodeBuild job that build a CloudFormation module from a SAM template
-
-Outputs:
-  oBuildCloudformationModuleStageArn:
-    Description: The ARN of the CloudFormation module CodeBuild job
-    Value: !GetAtt rBuildCloudformationModuleStage.Arn

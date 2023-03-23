@@ -70,6 +70,73 @@ Globals:
     KmsKeyArn: !GetAtt rKMSKey.Arn
 
 Resources:
+  ######## LAKE FORMATION #########
+  # Role defined upstream due to Lake Formation PutDataLakeSettings constraints
+  rDataLakeAdminRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: sdlf-lakeformation-admin
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - glue.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AWSLakeFormationDataAdmin
+      Policies:
+        - PolicyName: sdlf-lakeformation-admin
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: CreateLogGroup
+                Effect: Allow
+                Action:
+                  - logs:AssociateKmsKey
+                  - logs:CreateLogGroup
+                Resource: "*"
+              - Sid: CreateLogStream
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/sdlf-*
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/glue/*
+              - Sid: DynamoDBAccess
+                Effect: Allow
+                Action:
+                  - dynamodb:BatchGetItem
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:DescribeTable
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                  - dynamodb:PutItem
+                  - dynamodb:Scan
+                  - dynamodb:UpdateItem
+                Resource:
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/octagon-*
+              - Sid: SSMAccess
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/SDLF/IAM/DataLakeAdminRoleArn
+
+  rDataLakeSettings:
+    Type: AWS::LakeFormation::DataLakeSettings
+    Properties:
+      Admins:
+        - DataLakePrincipalIdentifier: !GetAtt rCodeBuildRole.Arn
+        - DataLakePrincipalIdentifier: !GetAtt rDataLakeAdminRole.Arn
+
   ######## KMS #########
   rKMSKey:
     Type: AWS::KMS::Key
@@ -1333,6 +1400,13 @@ Resources:
       Type: String
       Value: !Ref pApplicationName
       Description: Name of the Application
+  rDataLakeAdminRoleSsm:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /SDLF/IAM/DataLakeAdminRoleArn
+      Type: String
+      Value: !GetAtt rDataLakeAdminRole.Arn
+      Description: Lake Formation Data Lake Admin Role
 
 Outputs:
   oPipelineReference:

@@ -1,0 +1,202 @@
+AWSTemplateFormatVersion: 2010-09-09
+#Transform: AWS::Serverless-2016-10-31
+Description: Create CodeCommit repositories for SDLF components
+
+Parameters:
+  pCicdRepository:
+    Type: String
+    Default: sdlf-cicd
+  pFoundationsRepository:
+    Type: String
+    Default: sdlf-foundations
+  pTeamRepository:
+    Type: String
+    Default: sdlf-team
+  pPipelineRepository:
+    Type: String
+    Default: sdlf-pipeline
+  pDatasetRepository:
+    Type: String
+    Default: sdlf-dataset
+  pStageARepository:
+    Type: String
+    Default: sdlf-stageA
+  pStageBRepository:
+    Type: String
+    Default: sdlf-stageB
+  pDatalakeLibraryRepository:
+    Type: String
+    Default: sdlf-datalakeLibrary
+  pPipLibraryRepository:
+    Type: String
+    Default: sdlf-pipLibrary
+  pUtilsRepository:
+    Type: String
+    Default: sdlf-utils
+  pMainRepository:
+    Type: String
+    Default: sdlf-main
+  pChildAccounts:
+    Type: CommaDelimitedList
+
+Resources:
+  rCicdCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+        BranchName: master
+        S3: ../sdlf-cicd
+      RepositoryDescription: sdlf-cicd repository
+      RepositoryName: !Ref pCicdRepository
+
+  rFoundationsCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+        BranchName: master
+        S3: ../sdlf-foundations
+      RepositoryDescription: sdlf-foundations repository
+      RepositoryName: !Ref pFoundationsRepository
+
+  rTeamCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+        BranchName: master
+        S3: ../sdlf-team
+      RepositoryDescription: sdlf-team repository
+      RepositoryName: !Ref pTeamRepository
+
+  rPipelineCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+        BranchName: master
+        S3: ../sdlf-pipeline
+      RepositoryDescription: sdlf-pipeline repository
+      RepositoryName: !Ref pPipelineRepository
+
+  rDatasetCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+        BranchName: master
+        S3: ../sdlf-dataset
+      RepositoryDescription: sdlf-dataset repository
+      RepositoryName: !Ref pDatasetRepository
+
+  rStageACodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+        BranchName: master
+        S3: ../sdlf-stageA
+      RepositoryDescription: sdlf-stageA repository
+      RepositoryName: !Ref pStageARepository
+
+  rStageBCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+        BranchName: master
+        S3: ../sdlf-stageB
+      RepositoryDescription: sdlf-stageB repository
+      RepositoryName: !Ref pStageBRepository
+
+  rDatalakeLibraryCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+        BranchName: master
+        S3: ../sdlf-datalakeLibrary
+      RepositoryDescription: sdlf-datalakeLibrary repository
+      RepositoryName: !Ref pDatalakeLibraryRepository
+
+  rPipLibraryCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+        BranchName: master
+        S3: ../sdlf-pipLibrary
+      RepositoryDescription: sdlf-pipLibrary repository
+      RepositoryName: !Ref pPipLibraryRepository
+
+  # rUtilsCodeCommit:
+  #   Type: AWS::CodeCommit::Repository
+  #   Properties:
+  #     Code:
+  #       BranchName: master
+  #       S3: ../sdlf-utils
+  #     RepositoryDescription: sdlf-utils repository
+  #     RepositoryName: !Ref pUtilsRepository
+
+  rMainCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+#      Code:
+#        BranchName: master
+#        S3: ../sdlf-main
+      RepositoryDescription: sdlf-main repository
+      RepositoryName: !Ref pMainRepository
+
+  rCodeCommitRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Role assumed by CodePipeline in child AWS account
+      Path: /
+      RoleName: sdlf-cicd-components-codecommit
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Ref pChildAccounts
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codecommit:CancelUploadArchive
+                  - codecommit:Describe*
+                  - codecommit:Get*
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:GitPull
+                  - codecommit:List*
+                  - codecommit:UploadArchive
+                Resource:
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pCicdRepository}
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pFoundationsRepository}
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pTeamRepository}
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pPipelineRepository}
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pDatasetRepository}
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pStageARepository}
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pStageBRepository}
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pDatalakeLibraryRepository}
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pPipLibraryRepository}
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pUtilsRepository}
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${pMainRepository}
+              - Effect: Allow
+                Action:
+                  - s3:Get*
+                  - s3:ListBucket*
+                  - s3:Put*
+                Resource:
+                  - !Sub arn:aws:s3:::sdlf-cfn-artifacts-${AWS::Region}-*
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:Describe*
+                  - kms:Encrypt
+                  - kms:GenerateDataKey*
+                  - kms:List*
+                  - kms:ReEncrypt*
+                Resource: "*"
+                Condition:
+                  ForAnyValue:StringLike:
+                    kms:ResourceAliases: "alias/sdlf-cicd-kms-key-*"
