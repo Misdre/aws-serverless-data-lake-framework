@@ -1,0 +1,147 @@
+AWSTemplateFormatVersion: 2010-09-09
+#Transform: AWS::Serverless-2016-10-31
+Description: Create CodeCommit repositories for SDLF components
+
+Parameters:
+  pCicdRepository:
+    Type: String
+    Default: sdlf-cicd
+  pFoundationsRepository:
+    Type: String
+    Default: sdlf-foundations
+  pTeamRepository:
+    Type: String
+    Default: sdlf-team
+  pPipelineRepository:
+    Type: String
+    Default: sdlf-pipeline
+  pDatasetRepository:
+    Type: String
+    Default: sdlf-dataset
+  pStageARepository:
+    Type: String
+    Default: sdlf-stageA
+  pStageBRepository:
+    Type: String
+    Default: sdlf-stageB
+  pDatalakeLibraryRepository:
+    Type: String
+    Default: sdlf-datalakeLibrary
+  pPipLibraryRepository:
+    Type: String
+    Default: sdlf-pipLibrary
+  pUtilsRepository:
+    Type: String
+    Default: sdlf-utils
+  pMainRepository:
+    Type: String
+    Default: sdlf-main
+
+Mappings:
+  pCodeCommitBranch:
+    dev:
+      branch: dev
+    test:
+      branch: test
+    prod:
+      branch: master
+
+Resources:
+  rCicdCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+        BranchName: master
+        S3: ../sdlf-cicd
+      RepositoryDescription: sdlf-cicd repository
+      RepositoryName: !Ref pCicdRepository
+
+  rFoundationsCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+        BranchName: master
+        S3: ../sdlf-foundations
+      RepositoryDescription: sdlf-foundations repository
+      RepositoryName: !Ref pFoundationsRepository
+
+  rTeamCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+        BranchName: master
+        S3: ../sdlf-team
+      RepositoryDescription: sdlf-team repository
+      RepositoryName: !Ref pTeamRepository
+
+  rPipelineCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+        BranchName: master
+        S3: ../sdlf-pipeline
+      RepositoryDescription: sdlf-pipeline repository
+      RepositoryName: !Ref pPipelineRepository
+
+  rDatasetCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+        BranchName: master
+        S3: ../sdlf-dataset
+      RepositoryDescription: sdlf-dataset repository
+      RepositoryName: !Ref pDatasetRepository
+
+  rStageACodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+        BranchName: master
+        S3: ../sdlf-stageA
+      RepositoryDescription: sdlf-stageA repository
+      RepositoryName: !Ref pStageARepository
+
+  rStageBCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+        BranchName: master
+        S3: ../sdlf-stageB
+      RepositoryDescription: sdlf-stageB repository
+      RepositoryName: !Ref pStageBRepository
+
+  rDatalakeLibraryCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+        BranchName: master
+        S3: ../sdlf-datalakeLibrary
+      RepositoryDescription: sdlf-datalakeLibrary repository
+      RepositoryName: !Ref pDatalakeLibraryRepository
+
+  rPipLibraryCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+        BranchName: master
+        S3: ../sdlf-pipLibrary
+      RepositoryDescription: sdlf-pipLibrary repository
+      RepositoryName: !Ref pPipLibraryRepository
+
+  rUtilsCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+        BranchName: master
+        S3: ../sdlf-utils
+      RepositoryDescription: sdlf-utils repository
+      RepositoryName: !Ref pUtilsRepository
+
+  rMainCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      Code:
+#        BranchName: master
+#        S3: ../sdlf-main
+      RepositoryDescription: sdlf-main repository
+      RepositoryName: !Ref pMainRepository
