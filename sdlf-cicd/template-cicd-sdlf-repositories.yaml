@@ -1372,6 +1372,83 @@ Resources:
       SourceArn: !GetAtt rMainRepositoryLambdaTriggerRule.Arn
 
   ######## CODEBUILD JOBS #########
+  rCloudFormationPackageCodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: sdlf-codebuild
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/sdlf-*
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                Resource:
+                  - !Sub arn:aws:s3:::${pArtifactsBucket}/*
+              - Effect: Allow
+                Action:
+                  - kms:CreateGrant
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                  - kms:Encrypt
+                  - kms:GenerateDataKey*
+                  - kms:ReEncrypt*
+                Resource:
+                  - !Ref pKMSKey
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource: arn:aws:iam::*:role/sdlf-cicd-team-crossaccount-cloudformation-package
+
+  rCloudFormationPackageCodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: sdlf-cicd-cloudformation-package
+      Artifacts:
+        Type: CODEPIPELINE
+      EncryptionKey: !Ref pKMSKey
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: ARTIFACTS_BUCKET
+            Type: PLAINTEXT
+            Value: !Ref pArtifactsBucket
+          - Name: TEMPLATE
+            Type: PLAINTEXT
+            Value: template.yaml
+      ServiceRole: !GetAtt rLambdaLayersCodeBuildServiceRole.Arn
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - aws cloudformation package --template "$TEMPLATE" --s3-bucket $ARTIFACTS_BUCKET --s3-prefix codebuild --output-template-file packaged-template.yaml
+          artifacts:
+            files:
+              - packaged-template.yaml
+
   rLambdaLayersCodeBuildServiceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -1420,7 +1497,7 @@ Resources:
                   - !Ref pKMSKey
               - Effect: Allow
                 Action: sts:AssumeRole
-                Resource: !Sub arn:aws:iam::*:role/sdlf-cicd-domain-crossaccount-lambda-layers
+                Resource: arn:aws:iam::*:role/sdlf-cicd-domain-crossaccount-lambda-layers
 
   rTeamUnitTestCodeBuildProject:
     Type: AWS::CodeBuild::Project
@@ -1586,3 +1663,10 @@ Resources:
       Type: String
       Value: !Ref rTeamUnitTestCodeBuildProject
       Description: Name of the CodeBuild job that Unit Tests
+  rBuildCloudFormationPackageSsm:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /SDLF/CodeBuild/BuildCloudFormationPackage
+      Type: String
+      Value: !Ref rCloudFormationPackageCodeBuildProject
+      Description: CodeBuild job that packages a CloudFormation template
